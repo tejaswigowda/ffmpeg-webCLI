@@ -60,6 +60,9 @@ Fine-tune the look of a clip with the `eq` filter. Three sliders control brightn
 ### 🚫 Strip Metadata
 Remove all embedded metadata -- GPS coordinates, camera make/model, creation timestamps, and any other tags -- before sharing a file. Uses `-map_metadata -1` during re-encoding.
 
+### 🛠 Raw FFmpeg
+Full access to the ffmpeg command line directly in the browser. Type any arguments into the text area; they are inserted after `-i input` and before the output filename. Choose the output file extension and optionally bypass the trim range. A live **full command preview** updates as you type, showing the exact command that will be executed. Quoted values containing spaces are handled correctly.
+
 ---
 
 ## How It Works
