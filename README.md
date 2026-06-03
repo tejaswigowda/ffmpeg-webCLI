@@ -2,7 +2,7 @@
 
 A browser-based video editor powered by [ffmpeg.wasm](https://github.com/ffmpegwasm/ffmpeg.wasm). <b><ins>No uploads, no servers -- all processing happens locally</ins></b> in your browser using WebAssembly.
 
-🚀 **Live app:** https://tejaswigowda.com/ffmpeg.wasm.editor/
+🚀 **Live app:** https://tejaswigowda.com/ffmpeg-webCLI/
 
 ---
 
@@ -253,7 +253,7 @@ The editor works **completely offline** with intelligent caching and screen wake
   - Safari on iOS (iOS PWA support is limited but available)
 
 ### How to Use as PWA
-1. **Web browser:** Visit the app at https://tejaswigowda.com/ffmpeg.wasm.editor/
+1. **Web browser:** Visit the app at https://tejaswigowda.com/ffmpeg-webCLI/
 2. **Install:** Click the install button in your browser's address bar or menu → confirm installation
 3. **Use offline:** Load ffmpeg once online, then work offline without internet connection
 4. **Screen stays active:** Processing automatically keeps your screen on to prevent interruptions
