@@ -123,6 +123,47 @@
     .cmd-preview { font-family: 'SF Mono', 'Fira Code', 'Courier New', monospace; font-size: 0.72rem; background: #080a10; color: #7dd3fc; padding: 10px 12px; border-radius: 6px; word-break: break-all; line-height: 1.6; margin-top: 4px; white-space: pre-wrap; min-height: 36px; }
     .hint { font-size: 0.72rem; color: var(--muted); margin-top: 6px; }
 
+    .crop-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+    .crop-summary { font-size: 0.78rem; color: var(--text); font-weight: 600; }
+    .crop-editor { border: 1px solid var(--border); border-radius: 7px; background: #080a10; padding: 8px; }
+    .crop-stage { position: relative; overflow: hidden; border-radius: 5px; background: #05060a; touch-action: none; user-select: none; }
+    .crop-stage canvas { display: block; width: 100%; height: auto; }
+    .crop-empty { padding: 28px 14px; text-align: center; color: var(--muted); font-size: 0.8rem; background: var(--surface); border-radius: 5px; }
+    .crop-selection {
+      position: absolute;
+      border: 2px solid var(--accent);
+      box-shadow: 0 0 0 9999px rgba(2, 6, 23, .58);
+      cursor: move;
+      min-width: 18px;
+      min-height: 18px;
+    }
+    .crop-selection::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background:
+        linear-gradient(to right, transparent 33.333%, rgba(255,255,255,.22) 33.333%, rgba(255,255,255,.22) calc(33.333% + 1px), transparent calc(33.333% + 1px), transparent 66.666%, rgba(255,255,255,.22) 66.666%, rgba(255,255,255,.22) calc(66.666% + 1px), transparent calc(66.666% + 1px)),
+        linear-gradient(to bottom, transparent 33.333%, rgba(255,255,255,.22) 33.333%, rgba(255,255,255,.22) calc(33.333% + 1px), transparent calc(33.333% + 1px), transparent 66.666%, rgba(255,255,255,.22) 66.666%, rgba(255,255,255,.22) calc(66.666% + 1px), transparent calc(66.666% + 1px));
+    }
+    .crop-handle {
+      position: absolute;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      border: 2px solid var(--surface);
+      background: var(--accent);
+      box-shadow: 0 0 0 1px rgba(255,255,255,.25);
+    }
+    .crop-handle[data-handle="nw"] { left: -7px; top: -7px; cursor: nwse-resize; }
+    .crop-handle[data-handle="n"]  { left: 50%; top: -7px; transform: translateX(-50%); cursor: ns-resize; }
+    .crop-handle[data-handle="ne"] { right: -7px; top: -7px; cursor: nesw-resize; }
+    .crop-handle[data-handle="e"]  { right: -7px; top: 50%; transform: translateY(-50%); cursor: ew-resize; }
+    .crop-handle[data-handle="se"] { right: -7px; bottom: -7px; cursor: nwse-resize; }
+    .crop-handle[data-handle="s"]  { left: 50%; bottom: -7px; transform: translateX(-50%); cursor: ns-resize; }
+    .crop-handle[data-handle="sw"] { left: -7px; bottom: -7px; cursor: nesw-resize; }
+    .crop-handle[data-handle="w"]  { left: -7px; top: 50%; transform: translateY(-50%); cursor: ew-resize; }
+
     /* ── Progress ── */
     .progress-wrap { margin: 12px 0; }
     .progress-header { display: flex; justify-content: space-between; font-size: 0.78rem; color: var(--muted); margin-bottom: 5px; }
@@ -172,6 +213,17 @@
 
       .form-row { gap: 6px; }
       .form-group { min-width: 0; flex-basis: calc(50% - 3px); }
+      .crop-toolbar { align-items: flex-start; }
+      .crop-summary { flex: 1 1 100%; }
+      .crop-handle { width: 16px; height: 16px; }
+      .crop-handle[data-handle="nw"] { left: -9px; top: -9px; }
+      .crop-handle[data-handle="n"]  { top: -9px; }
+      .crop-handle[data-handle="ne"] { right: -9px; top: -9px; }
+      .crop-handle[data-handle="e"]  { right: -9px; }
+      .crop-handle[data-handle="se"] { right: -9px; bottom: -9px; }
+      .crop-handle[data-handle="s"]  { bottom: -9px; }
+      .crop-handle[data-handle="sw"] { left: -9px; bottom: -9px; }
+      .crop-handle[data-handle="w"]  { left: -9px; }
 
       .size-estimate { flex-wrap: wrap; gap: 4px; }
 
@@ -460,27 +512,31 @@
           <!-- Crop -->
           <div class="op-panel hidden" id="panel-crop">
             <h4>Crop</h4>
-            <div class="form-row">
-              <div class="form-group">
-                <label class="lbl">X — left offset (px)</label>
-                <input type="number" id="cropX" value="0" min="0" oninput="updateSizeEstimate()">
-              </div>
-              <div class="form-group">
-                <label class="lbl">Y — top offset (px)</label>
-                <input type="number" id="cropY" value="0" min="0" oninput="updateSizeEstimate()">
+            <div class="crop-toolbar">
+              <div class="crop-summary" id="cropSummary">Load a video to crop.</div>
+              <button class="btn btn-ghost btn-sm" type="button" onclick="resetCropSelection()"><i class="fas fa-rotate-left"></i> Reset</button>
+            </div>
+            <div class="crop-editor">
+              <div class="crop-stage" id="cropStage">
+                <canvas id="cropCanvas" class="hidden"></canvas>
+                <div class="crop-selection hidden" id="cropSelection" aria-label="Crop selection">
+                  <span class="crop-handle" data-handle="nw"></span>
+                  <span class="crop-handle" data-handle="n"></span>
+                  <span class="crop-handle" data-handle="ne"></span>
+                  <span class="crop-handle" data-handle="e"></span>
+                  <span class="crop-handle" data-handle="se"></span>
+                  <span class="crop-handle" data-handle="s"></span>
+                  <span class="crop-handle" data-handle="sw"></span>
+                  <span class="crop-handle" data-handle="w"></span>
+                </div>
+                <div class="crop-empty" id="cropEmpty">Load a video to preview the crop area.</div>
               </div>
             </div>
-            <div class="form-row">
-              <div class="form-group">
-                <label class="lbl">Width (px)</label>
-                <input type="number" id="cropW" placeholder="auto" oninput="updateSizeEstimate()">
-              </div>
-              <div class="form-group">
-                <label class="lbl">Height (px)</label>
-                <input type="number" id="cropH" placeholder="auto" oninput="updateSizeEstimate()">
-              </div>
-            </div>
-            <p class="hint">X/Y are offsets from the top-left. Leave width/height blank to crop to the remaining area.</p>
+            <input type="hidden" id="cropX" value="0">
+            <input type="hidden" id="cropY" value="0">
+            <input type="hidden" id="cropW">
+            <input type="hidden" id="cropH">
+            <p class="hint">Drag the box to move it. Drag the handles to resize.</p>
           </div>
 
           <!-- Thumbnail -->
@@ -971,11 +1027,14 @@ let mixAudioFile  = null; let mixAudioExt   = '';
 let concatFile    = null; let concatExt     = '';
 let sxsFile       = null; let sxsExt        = '';
 let pipFile       = null; let pipExt        = '';
+const CROP_MIN_PX = 24;
+const cropState = { x: 0, y: 0, w: 0, h: 0, drag: null };
 
 // ── Expose to inline handlers ─────────────────────────
 Object.assign(window, {
   loadFFmpeg, handleFile, clearInput, setOp,
   updateTrim, runProcess, download, clearLog, updateSizeEstimate, updateRawPreview,
+  resetCropSelection,
   onRawInput2Change, onSubtitleFileChange,
   onOverlayFileChange, onMixAudioFileChange, onConcatFileChange,
   onSxsFileChange, onPipFileChange
@@ -1058,7 +1117,169 @@ dz.addEventListener('drop', e => {
   if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
 });
 
-// ── Screen Wake Lock ───────────────────────────────────
+// ── Crop selector ──────────────────────────────────────
+function getVideoSize() {
+  const vid = document.getElementById('inputVideo');
+  return { w: vid.videoWidth || 0, h: vid.videoHeight || 0 };
+}
+
+function clamp(n, min, max) {
+  return Math.min(max, Math.max(min, n));
+}
+
+function setCropFromPixels(next, shouldEstimate = true) {
+  const { w: srcW, h: srcH } = getVideoSize();
+  if (!srcW || !srcH) {
+    cropState.x = 0; cropState.y = 0; cropState.w = 0; cropState.h = 0;
+    syncCropUI();
+    return;
+  }
+
+  const minW = Math.min(CROP_MIN_PX, srcW);
+  const minH = Math.min(CROP_MIN_PX, srcH);
+  let w = clamp(Math.round(next.w), minW, srcW);
+  let h = clamp(Math.round(next.h), minH, srcH);
+  let x = clamp(Math.round(next.x), 0, srcW - w);
+  let y = clamp(Math.round(next.y), 0, srcH - h);
+
+  if (x + w > srcW) w = srcW - x;
+  if (y + h > srcH) h = srcH - y;
+
+  cropState.x = x; cropState.y = y; cropState.w = w; cropState.h = h;
+  syncCropUI();
+  if (shouldEstimate) updateSizeEstimate();
+}
+
+function syncCropUI() {
+  const { w: srcW, h: srcH } = getVideoSize();
+  const summary = document.getElementById('cropSummary');
+  const selection = document.getElementById('cropSelection');
+  const empty = document.getElementById('cropEmpty');
+  const canvas = document.getElementById('cropCanvas');
+
+  document.getElementById('cropX').value = cropState.x || 0;
+  document.getElementById('cropY').value = cropState.y || 0;
+  document.getElementById('cropW').value = cropState.w || '';
+  document.getElementById('cropH').value = cropState.h || '';
+
+  if (!srcW || !srcH || !inputFile) {
+    summary.textContent = 'Load a video to crop.';
+    selection.classList.add('hidden');
+    canvas.classList.add('hidden');
+    empty.classList.remove('hidden');
+    return;
+  }
+
+  summary.textContent = `${cropState.w} x ${cropState.h} at X ${cropState.x}, Y ${cropState.y}`;
+  selection.style.left = (cropState.x / srcW * 100) + '%';
+  selection.style.top = (cropState.y / srcH * 100) + '%';
+  selection.style.width = (cropState.w / srcW * 100) + '%';
+  selection.style.height = (cropState.h / srcH * 100) + '%';
+  if (!canvas.classList.contains('hidden')) selection.classList.remove('hidden');
+}
+
+function renderCropFrame() {
+  const vid = document.getElementById('inputVideo');
+  const canvas = document.getElementById('cropCanvas');
+  const empty = document.getElementById('cropEmpty');
+  const selection = document.getElementById('cropSelection');
+  const { w: srcW, h: srcH } = getVideoSize();
+
+  if (!inputFile || !srcW || !srcH || vid.readyState < 2) {
+    syncCropUI();
+    return;
+  }
+
+  const previewW = Math.min(srcW, 1200);
+  const previewH = Math.max(1, Math.round(previewW * srcH / srcW));
+  canvas.width = previewW;
+  canvas.height = previewH;
+  canvas.getContext('2d').drawImage(vid, 0, 0, previewW, previewH);
+  canvas.classList.remove('hidden');
+  empty.classList.add('hidden');
+  selection.classList.remove('hidden');
+  syncCropUI();
+}
+
+function resetCropSelection() {
+  const { w: srcW, h: srcH } = getVideoSize();
+  if (!srcW || !srcH) {
+    setCropFromPixels({ x: 0, y: 0, w: 0, h: 0 });
+    return;
+  }
+  setCropFromPixels({ x: 0, y: 0, w: srcW, h: srcH });
+  renderCropFrame();
+}
+
+function startCropDrag(e) {
+  const { w: srcW, h: srcH } = getVideoSize();
+  if (!srcW || !srcH || !inputFile) return;
+
+  const handle = e.target.dataset && e.target.dataset.handle;
+  const selection = document.getElementById('cropSelection');
+  if (!handle && e.target !== selection) return;
+
+  e.preventDefault();
+  const stage = document.getElementById('cropStage');
+  const rect = stage.getBoundingClientRect();
+  cropState.drag = {
+    pointerId: e.pointerId,
+    mode: handle || 'move',
+    startX: e.clientX,
+    startY: e.clientY,
+    scaleX: srcW / rect.width,
+    scaleY: srcH / rect.height,
+    crop: { x: cropState.x, y: cropState.y, w: cropState.w, h: cropState.h }
+  };
+  stage.setPointerCapture(e.pointerId);
+}
+
+function moveCropDrag(e) {
+  const drag = cropState.drag;
+  if (!drag || drag.pointerId !== e.pointerId) return;
+
+  const { w: srcW, h: srcH } = getVideoSize();
+  const dx = (e.clientX - drag.startX) * drag.scaleX;
+  const dy = (e.clientY - drag.startY) * drag.scaleY;
+  const minW = Math.min(CROP_MIN_PX, srcW);
+  const minH = Math.min(CROP_MIN_PX, srcH);
+  let left = drag.crop.x;
+  let top = drag.crop.y;
+  let right = drag.crop.x + drag.crop.w;
+  let bottom = drag.crop.y + drag.crop.h;
+
+  if (drag.mode === 'move') {
+    setCropFromPixels({ x: drag.crop.x + dx, y: drag.crop.y + dy, w: drag.crop.w, h: drag.crop.h });
+    return;
+  }
+
+  if (drag.mode.includes('w')) left = clamp(drag.crop.x + dx, 0, right - minW);
+  if (drag.mode.includes('e')) right = clamp(drag.crop.x + drag.crop.w + dx, left + minW, srcW);
+  if (drag.mode.includes('n')) top = clamp(drag.crop.y + dy, 0, bottom - minH);
+  if (drag.mode.includes('s')) bottom = clamp(drag.crop.y + drag.crop.h + dy, top + minH, srcH);
+
+  setCropFromPixels({ x: left, y: top, w: right - left, h: bottom - top });
+}
+
+function endCropDrag(e) {
+  if (!cropState.drag || cropState.drag.pointerId !== e.pointerId) return;
+  document.getElementById('cropStage').releasePointerCapture(e.pointerId);
+  cropState.drag = null;
+}
+
+document.getElementById('cropStage').addEventListener('pointerdown', startCropDrag);
+document.getElementById('cropStage').addEventListener('pointermove', moveCropDrag);
+document.getElementById('cropStage').addEventListener('pointerup', endCropDrag);
+document.getElementById('cropStage').addEventListener('pointercancel', endCropDrag);
+document.getElementById('inputVideo').addEventListener('loadeddata', () => {
+  if (currentOp === 'crop') renderCropFrame();
+});
+document.getElementById('inputVideo').addEventListener('seeked', () => {
+  if (currentOp === 'crop') renderCropFrame();
+});
+window.addEventListener('resize', syncCropUI);
+
+	// ── Screen Wake Lock ───────────────────────────────────
 // Prevent screen from sleeping during processing
 let wakeLock = null;
 
@@ -1184,9 +1405,7 @@ async function handleFile(file) {
     // Auto-fill resize & compress dimensions from source video
     if (vid.videoWidth)  document.getElementById('rcW').value = vid.videoWidth;
     if (vid.videoHeight) document.getElementById('rcH').value = vid.videoHeight;
-    // Auto-fill crop dimensions
-    if (vid.videoWidth)  document.getElementById('cropW').value = vid.videoWidth;
-    if (vid.videoHeight) document.getElementById('cropH').value = vid.videoHeight;
+    resetCropSelection();
     // Auto-fill thumbnail timestamp to midpoint
     document.getElementById('thumbTime').value = (vidDur / 2).toFixed(1);
     updateSizeEstimate();
@@ -1205,6 +1424,7 @@ function clearInput() {
   document.getElementById('inputVideo').src = '';
   document.getElementById('inputWrap').classList.add('hidden');
   document.getElementById('dropZone').classList.remove('hidden');
+  setCropFromPixels({ x: 0, y: 0, w: 0, h: 0 });
   syncProcessBtn();
   updateSizeEstimate();
 }
@@ -1237,6 +1457,7 @@ function setOp(op) {
   document.getElementById('op-' + op).classList.add('active');
   document.querySelectorAll('.op-panel').forEach(p => p.classList.add('hidden'));
   document.getElementById('panel-' + op).classList.remove('hidden');
+  if (op === 'crop') renderCropFrame();
   updateSizeEstimate();
   updateRawPreview();
   updateInfoPanel();
