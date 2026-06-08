@@ -10,7 +10,8 @@ A browser-based video editor powered by [ffmpeg.wasm](https://github.com/ffmpegw
 
 ## Key Features
 
-<img src='demos/features.png'>
+<img src='demos/features.png'/>
+
 
 ✓ **No Server Uploads** — All video processing happens entirely on your device
 ✓ **30+ Video Operations** — GIF creation, format conversion, compression, trimming, effects, filters, and more
@@ -267,7 +268,7 @@ The editor works **completely offline** with intelligent caching and screen wake
 ## Running Locally
 
 ```bash
-git clone https://github.com/tejaswigowda/ffmpeg-webCLI.
+git clone https://github.com/tejaswigowda/ffmpeg-webCLI
 cd ffmpeg-webCLI
 node server.js          # serves docs/ with the required COOP/COEP headers
 ```
