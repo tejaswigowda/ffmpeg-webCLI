@@ -11,6 +11,7 @@ A browser-based video editor powered by [ffmpeg.wasm](https://github.com/ffmpegw
 ## Key Features
 
 <img src='demos/features.png'>
+
 - ✓ **No Server Uploads** — All video processing happens entirely on your device
 - ✓ **30+ Video Operations** — GIF creation, format conversion, compression, trimming, effects, filters, and more
 - ✓ **Offline-First PWA** — Works completely offline after first use; install as a native app
