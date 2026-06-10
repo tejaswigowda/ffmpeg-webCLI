@@ -33,6 +33,30 @@ A browser-based video editor powered by [ffmpeg.wasm](https://github.com/ffmpegw
 
 ---
 
+## What It Replaces
+
+| Tool | What you replace |
+|---|---|
+| CloudConvert | Format conversion, compression, audio extraction |
+| Kapwing | Trim, crop, speed, reverse, fade, filters |
+| Clideo | Trim, compress, merge, mute, loop |
+| Ezgif | GIF maker, reverse, resize, crop, optimize |
+| Online-convert.com | Format conversion across video/audio |
+| MP3cut / Audiotrimmer | Audio extraction and trimming |
+| Metadata2go | Strip metadata |
+| Subtitle Horse | Embed subtitles |
+| Kapwing (side-by-side) | Side by side, picture-in-picture |
+| Loudnorm tools | Audio normalization |
+
+**The difference that matters:** every one of those tools uploads your file to a
+server. Some are free with ads, some charge — but all of them *see your file*, and
+all are subject to data breaches, subpoenas, and privacy-policy changes.
+
+ffmpeg-webCLI covers the common tasks of all of them, for free, with files that
+**never leave your device**.
+
+---
+
 ## Use Cases
 
 ### <span style="font-size:200%">▶</span> GIF Maker
