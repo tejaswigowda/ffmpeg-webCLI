@@ -67,7 +67,7 @@ The tool is built on `ffmpeg.wasm` [@ffmpegwasm], which compiles FFmpeg to
 WebAssembly via Emscripten [@emscripten]. \autoref{fig:arch} shows the overall
 architecture.
 
-![ffmpeg-webCLI architecture: the WASM binary executes in a Web Worker with no network access. Files are read from and written to the user's device only.\label{fig:arch}](architecture.svg)
+![ffmpeg-webCLI architecture: the WASM binary executes in a Web Worker with no network access. Files are read from and written to the user's device only.\label{fig:arch}](architecture.svg){ height=10cm }
 
 The key architectural decisions are:
 
