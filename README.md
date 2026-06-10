@@ -332,6 +332,7 @@ You are free to:
  <span style="font-size:200%">✓</span> Distribute modified versions
 
 With the requirement that you:
+
  <span style="font-size:200%">▢</span> Include a copy of the license
 
  <span style="font-size:200%">✎</span> Document changes made to the code
