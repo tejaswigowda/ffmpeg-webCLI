@@ -1037,6 +1037,13 @@
           <button class="btn btn-primary btn-block hidden" id="processStackBtn" disabled="true" onclick="runProcessStack()" style="margin-top:8px">
             <i class="fas fa-layer-group"></i> Process Stack
           </button>
+
+          <!-- Quick download in options panel -->
+          <div id="quickDownloadWrap" class="hidden" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+            <p style="font-size:0.78rem;color:var(--muted);margin-bottom:8px">Output ready:</p>
+            <button class="btn btn-success btn-block" id="quickDlBtn" onclick="download()"><i class="fas fa-download"></i> Download output</button>
+            <span class="out-size" id="quickOutMeta" style="display:block;font-size:0.72rem;color:var(--muted);text-align:center;margin-top:6px"></span>
+          </div>
         </div>
       </div>
 
@@ -1502,6 +1509,9 @@ async function handleFile(file) {
   if (!file) return;
   inputFile = file;
   inputExt  = file.name.split('.').pop().toLowerCase() || 'mp4';
+  
+  // Hide quick download when loading a new file (old output is no longer relevant)
+  document.getElementById('quickDownloadWrap').classList.add('hidden');
 
   const vid = document.getElementById('inputVideo');
   // Use a data: URL instead of blob: URL — avoids ERR_REQUEST_RANGE_NOT_SATISFIABLE.
@@ -1545,6 +1555,9 @@ function clearInput() {
   document.getElementById('inputVideo').src = '';
   document.getElementById('inputWrap').classList.add('hidden');
   document.getElementById('dropZone').classList.remove('hidden');
+  document.getElementById('quickDownloadWrap').classList.add('hidden');
+  document.getElementById('outEmpty').classList.remove('hidden');
+  document.getElementById('outContent').classList.add('hidden');
   setCropFromPixels({ x: 0, y: 0, w: 0, h: 0 });
   syncProcessBtn();
   updateSizeEstimate();
@@ -1563,8 +1576,24 @@ function toggleBatchMode() {
     queueList.classList.add('visible');
     dropZoneText.innerHTML = '<strong>Click to add files</strong> or drag & drop multiple files';
     fileInput.multiple = true;
-    clearInput();
-    batchQueue.length = 0;
+    
+    // Graceful fallback: if a video is already loaded, add it to batch queue
+    if (inputFile) {
+      batchQueue.push({
+        file: inputFile,
+        status: 'pending',
+        error: null,
+        output: null,
+        outputName: null
+      });
+      addLog(`Graceful fallback: Added "${inputFile.name}" to batch queue. You can add more files.`, 'ok');
+      // Hide the single video display but keep the file in the queue
+      document.getElementById('inputVideo').src = '';
+      document.getElementById('inputWrap').classList.add('hidden');
+      document.getElementById('dropZone').classList.remove('hidden');
+    } else {
+      batchQueue.length = 0;
+    }
     updateBatchQueueUI();
     addLog('Batch mode enabled. Drop multiple files to queue them.', 'ok');
   } else {
@@ -2979,8 +3008,16 @@ async function renderOutput(data, ext) {
     ov.src = url;
   }
 
-  document.getElementById('outMeta').textContent = `${fmtBytes(data.buffer.byteLength)} · ${ext.toUpperCase()}`;
+  const metaText = `${fmtBytes(data.buffer.byteLength)} · ${ext.toUpperCase()}`;
+  document.getElementById('outMeta').textContent = metaText;
+  document.getElementById('quickOutMeta').textContent = metaText;
   document.getElementById('dlBtn').innerHTML = `<i class="fas fa-download"></i> Download output.${ext}`;
+  document.getElementById('quickDlBtn').innerHTML = `<i class="fas fa-download"></i> Download output.${ext}`;
+  
+  // Show quick download in options panel (only in single mode, not batch)
+  if (!batchMode) {
+    document.getElementById('quickDownloadWrap').classList.remove('hidden');
+  }
 }
 
 // ── Operation stack: composition core ─────────────────
