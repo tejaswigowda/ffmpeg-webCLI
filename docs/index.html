@@ -1577,7 +1577,7 @@ function toggleBatchMode() {
   if (batchMode) {
     btn.classList.add('active');
     queueList.classList.add('visible');
-    dropZoneText.innerHTML = '<strong>Click to add files</strong> or drag & drop multiple files';
+    dropZoneText.innerHTML = '<strong>Click to add files</strong> or drag & drop multiple local files';
     fileInput.multiple = true;
     
     // Graceful fallback: if a video is already loaded, add it to batch queue
