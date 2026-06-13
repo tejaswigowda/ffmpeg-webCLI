@@ -2095,10 +2095,19 @@ async function runProcess() {
       case 'crop': {
         const vid = document.getElementById('inputVideo');
         const srcW = vid.videoWidth || 1920, srcH = vid.videoHeight || 1080;
-        const cx = parseInt(document.getElementById('cropX').value) || 0;
-        const cy = parseInt(document.getElementById('cropY').value) || 0;
-        const cw = parseInt(document.getElementById('cropW').value) || (srcW - cx);
-        const ch = parseInt(document.getElementById('cropH').value) || (srcH - cy);
+        let cx = parseInt(document.getElementById('cropX').value) || 0;
+        let cy = parseInt(document.getElementById('cropY').value) || 0;
+        let cw = parseInt(document.getElementById('cropW').value) || (srcW - cx);
+        let ch = parseInt(document.getElementById('cropH').value) || (srcH - cy);
+        
+        // Validate and clamp crop values
+        const maxX = Math.max(0, srcW - 1);
+        const maxY = Math.max(0, srcH - 1);
+        cx = Math.max(0, Math.min(cx, maxX));
+        cy = Math.max(0, Math.min(cy, maxY));
+        cw = Math.max(1, Math.min(cw, srcW - cx));
+        ch = Math.max(1, Math.min(ch, srcH - cy));
+        
         ext = document.getElementById('singleOutFmt').value;
         const cropVf = `crop=${cw}:${ch}:${cx}:${cy}`;
         if (ext === 'gif') {
@@ -2673,10 +2682,26 @@ function buildOperationArgs(args, videoEl, inputExt) {
       break;
     }
     case 'crop': {
-      const cx = parseInt(document.getElementById('cropX').value) || 0;
-      const cy = parseInt(document.getElementById('cropY').value) || 0;
-      const cw = parseInt(document.getElementById('cropW').value) || (srcW - cx);
-      const ch = parseInt(document.getElementById('cropH').value) || (srcH - cy);
+      let cx = parseInt(document.getElementById('cropX').value) || 0;
+      let cy = parseInt(document.getElementById('cropY').value) || 0;
+      let cw = parseInt(document.getElementById('cropW').value) || (srcW - cx);
+      let ch = parseInt(document.getElementById('cropH').value) || (srcH - cy);
+      
+      // Validate and clamp crop values to video dimensions (critical for batch processing with different video sizes)
+      const maxX = Math.max(0, srcW - 1);
+      const maxY = Math.max(0, srcH - 1);
+      const originalCx = cx, originalCy = cy, originalCw = cw, originalCh = ch;
+      
+      cx = Math.max(0, Math.min(cx, maxX));
+      cy = Math.max(0, Math.min(cy, maxY));
+      cw = Math.max(1, Math.min(cw, srcW - cx));
+      ch = Math.max(1, Math.min(ch, srcH - cy));
+      
+      // In batch mode, log if crop values were adjusted
+      if (batchMode && (cx !== originalCx || cy !== originalCy || cw !== originalCw || ch !== originalCh)) {
+        addLog(`  Crop adjusted for this video (${srcW}×${srcH}): (${originalCx},${originalCy} ${originalCw}×${originalCh}) → (${cx},${cy} ${cw}×${ch})`, 'warn');
+      }
+      
       const cropVf = `crop=${cw}:${ch}:${cx}:${cy}`;
       if (ext === 'gif') {
         args.push('-vf', `${cropVf},fps=10,scale=480:-2:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse`, '-an');
@@ -3045,7 +3070,18 @@ function opToFilters(item, ctx) {
   const SB      = { sharpen:{ light:'unsharp=3:3:0.8:3:3:0', medium:'unsharp=5:5:1.5:5:5:0', heavy:'unsharp=7:7:3:7:7:0' },
                     blur:   { light:'boxblur=3:1', medium:'boxblur=6:1', heavy:'boxblur=12:1' } };
   switch (item.op) {
-    case 'crop':           return { vf: [`crop=${p.w}:${p.h}:${p.x}:${p.y}`] };
+    case 'crop': {
+      // Validate and clamp crop values to video dimensions
+      const srcW = ctx.srcW || 1920, srcH = ctx.srcH || 1080;
+      let x = p.x || 0, y = p.y || 0, w = p.w || (srcW - x), h = p.h || (srcH - y);
+      const maxX = Math.max(0, srcW - 1);
+      const maxY = Math.max(0, srcH - 1);
+      x = Math.max(0, Math.min(x, maxX));
+      y = Math.max(0, Math.min(y, maxY));
+      w = Math.max(1, Math.min(w, srcW - x));
+      h = Math.max(1, Math.min(h, srcH - y));
+      return { vf: [`crop=${w}:${h}:${x}:${y}`] };
+    }
     case 'resizecompress': return { vf: [`scale=${p.w}:${p.h}`] };
     case 'rotate':         return { vf: [ROT[p.mode]] };
     case 'adjust':         return { vf: [`eq=brightness=${p.br}:contrast=${p.con}:saturation=${p.sat}`] };
@@ -3151,7 +3187,13 @@ function composeStackCommand() {
   const trimE   = parseFloat(document.getElementById('trimEnd').value)   || vidDur;
   const hasTrim = trimS > 0 || (vidDur > 0 && trimE < vidDur - 0.05);
   const clipDur = (hasTrim ? (trimE - trimS) : vidDur) || 0;
-  const ctx     = { clipDur };
+  
+  // Get source video dimensions for crop validation
+  const vid = document.getElementById('inputVideo');
+  const srcW = vid.videoWidth || 1920;
+  const srcH = vid.videoHeight || 1080;
+  
+  const ctx     = { clipDur, srcW, srcH };
 
   const vf = [], af = [];
   for (const item of stack) {
