@@ -60,6 +60,19 @@ ffmpeg-webCLI covers the common tasks of all of them, for free, with files that
 
 ## Use Cases
 
+### ⛓ Operation Chaining (Stack Mode)
+Stack several compatible operations and run them in a **single pass**. Switch the Operations panel to **Stack (chain)** mode, configure an op, and click **Add to Stack** to queue it. The queue is an ordered, reorderable list — move items up/down or remove them — and a live **composed command preview** shows the exact `ffmpeg` invocation before you run it.
+
+All stacked operations are merged into one filter chain (`-vf "a,b,c"` / `-af "x,y"`) and encoded **only once**, so quality loss from repeated re-encoding is avoided. Any active trim is applied first as input seeking, then the chain runs, then the single encode targets your chosen output format. For example, crop → grayscale → convert-to-MP4 becomes:
+
+```
+ffmpeg -i input.mp4 -vf "crop=1280:720:0:0,eq=brightness=0:contrast=1:saturation=0" -c:v libx264 -preset fast -c:a aac output.mp4
+```
+
+**Chainable:** Crop, Resize, Rotate/Flip, Adjust (brightness/contrast/saturation), Grayscale, Fade, Denoise, Sharpen/Blur, Speed, Pad/Letterbox and Volume — every single-input, frame-wise video/audio filter.
+
+**Not chainable** (use Single mode): multi-input operations (Concatenate, Side by Side, Picture in Picture, Mix Audio, Embed Subtitles, Logo Overlay) and whole-file or different-output operations (GIF, Thumbnail, Reverse, Boomerang, Loop, Media Info). These are disabled in Stack mode with an inline explanation.
+
 ### ▶ GIF Maker
 Convert any video clip into an animated GIF. Set the frame rate and output width; height scales automatically to preserve the aspect ratio. Uses a two-pass palette generation for the best possible color quality.
 

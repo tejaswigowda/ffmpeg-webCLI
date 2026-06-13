@@ -101,6 +101,8 @@
     .op-tile { background: var(--surface2); border: 2px solid var(--border); border-radius: 8px; padding: 9px 10px; cursor: pointer; text-align: center; font-size: 0.8rem; font-weight: 600; color: var(--muted); transition: all .15s; }
     .op-tile:hover { border-color: var(--accent); color: var(--accent); }
     .op-tile.active { border-color: var(--accent); background: rgba(99,102,241,.12); color: var(--accent); }
+    .op-tile.disabled { opacity: 0.4; cursor: not-allowed; }
+    .op-tile.disabled:hover { border-color: var(--border); color: var(--muted); }
     .op-tile i { display: block;     font-size: 30px;
     margin-bottom: 12px; }
 
@@ -122,6 +124,23 @@
     input:focus, select:focus, textarea:focus { border-color: var(--accent); }
     .cmd-preview { font-family: 'SF Mono', 'Fira Code', 'Courier New', monospace; font-size: 0.72rem; background: #080a10; color: #7dd3fc; padding: 10px 12px; border-radius: 6px; word-break: break-all; line-height: 1.6; margin-top: 4px; white-space: pre-wrap; min-height: 36px; }
     .hint { font-size: 0.72rem; color: var(--muted); margin-top: 6px; }
+
+    /* ── Operation stack (chaining) ── */
+    .mode-toggle { display: inline-flex; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 3px; gap: 3px; margin-bottom: 12px; }
+    .mode-btn { padding: 6px 16px; border-radius: 6px; font-size: 0.8rem; font-weight: 600; color: var(--muted); cursor: pointer; border: none; background: transparent; transition: background .15s, color .15s; }
+    .mode-btn:hover { color: var(--text); }
+    .mode-btn.active { background: var(--accent); color: #fff; }
+    .stack-empty { font-size: 0.8rem; color: var(--muted); padding: 10px 4px; text-align: center; }
+    .stack-item { display: flex; align-items: center; gap: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 7px; padding: 7px 9px; margin-bottom: 6px; }
+    .stack-idx { flex-shrink: 0; width: 20px; height: 20px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 0.72rem; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+    .stack-label { flex: 1; font-size: 0.8rem; color: var(--text); font-weight: 600; display: flex; align-items: center; gap: 7px; min-width: 0; }
+    .stack-label i { color: var(--accent); flex-shrink: 0; }
+    .stack-controls { display: inline-flex; gap: 4px; flex-shrink: 0; }
+    .stack-mini { width: 26px; height: 26px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface2); color: var(--muted); cursor: pointer; font-size: 0.72rem; display: inline-flex; align-items: center; justify-content: center; transition: color .15s, border-color .15s; }
+    .stack-mini:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+    .stack-mini.danger:hover:not(:disabled) { color: var(--danger); border-color: var(--danger); }
+    .stack-mini:disabled { opacity: .3; cursor: not-allowed; }
+    .stack-note { font-size: 0.78rem; color: var(--warn); background: rgba(234,179,8,.08); border: 1px solid rgba(234,179,8,.25); border-radius: 7px; padding: 9px 11px; margin-top: 6px; display: flex; align-items: center; gap: 7px; }
 
     .crop-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
     .crop-summary { font-size: 0.78rem; color: var(--text); font-weight: 600; }
@@ -342,6 +361,12 @@
       <div class="card">
         <div class="card-header">Operations</div>
         <div class="card-body">
+
+          <!-- Mode toggle: single op vs. operation stack -->
+          <div class="mode-toggle" role="tablist" aria-label="Processing mode">
+            <button class="mode-btn active" id="modeSingle" onclick="setMode('single')"><i class="fas fa-square"></i> Single</button>
+            <button class="mode-btn" id="modeStack" onclick="setMode('stack')"><i class="fas fa-layer-group"></i> Stack (chain)</button>
+          </div>
 
           <!-- Op tiles -->
           <div class="ops-grid">
@@ -933,6 +958,45 @@
             <p class="hint">Sharpen uses <code>unsharp</code>; blur uses <code>boxblur</code>. Audio is copied.</p>
           </div>
 
+          <!-- Operation stack (chaining) -->
+          <div id="stackSection" class="hidden">
+            <div class="op-panel">
+              <h4>Operation Stack</h4>
+              <div id="stackList"><div class="stack-empty">No operations yet — configure an op above and click &ldquo;Add to Stack&rdquo;.</div></div>
+              <div class="form-row" style="margin-top:10px">
+                <div class="form-group">
+                  <label class="lbl">Output format</label>
+                  <select id="stackOutFmt" onchange="updateStackPreview()">
+                    <option value="mp4">MP4 (H.264 + AAC)</option>
+                    <option value="mkv">MKV (H.264 + AAC)</option>
+                    <option value="mov">MOV (H.264 + AAC)</option>
+                    <option value="webm">WebM (VP9 + Opus)</option>
+                    <option value="gif">GIF (animated)</option>
+                    <option value="avi">AVI</option>
+                  </select>
+                </div>
+              </div>
+              <label class="lbl" style="margin-top:10px;display:block">Composed command preview</label>
+              <div class="cmd-preview" id="stackPreview">(stack is empty)</div>
+              <p class="hint">Operations run in the listed order as one filter chain with a single re-encode. Trim (if set) is applied first.</p>
+            </div>
+          </div>
+
+          <!-- Global output format (single mode) -->
+          <div id="singleOutFmtWrap" class="form-row" style="margin-top:12px">
+            <div class="form-group">
+              <label class="lbl">Output Format</label>
+              <select id="singleOutFmt" onchange="updateSizeEstimate()">
+                <option value="mp4">MP4 (H.264 + AAC)</option>
+                <option value="mkv">MKV (H.264 + AAC)</option>
+                <option value="mov">MOV (H.264 + AAC)</option>
+                <option value="webm">WebM (VP9 + Opus)</option>
+                <option value="gif">GIF (animated)</option>
+                <option value="avi">AVI</option>
+              </select>
+            </div>
+          </div>
+
           <!-- Size estimate -->
           <div id="sizeEstWrap" class="size-estimate hidden">
             <span>Estimated output size</span>
@@ -947,6 +1011,13 @@
 
           <button class="btn btn-primary btn-block" id="processBtn" disabled="true" onclick="runProcess()" style="margin-top:6px">
             <i class="fas fa-gear"></i> Process Video
+          </button>
+          <button class="btn btn-ghost btn-block hidden" id="addStackBtn" disabled="true" onclick="addToStack()" style="margin-top:6px">
+            <i class="fas fa-plus"></i> Add to Stack
+          </button>
+          <div class="stack-note hidden" id="addStackNote"></div>
+          <button class="btn btn-primary btn-block hidden" id="processStackBtn" disabled="true" onclick="runProcessStack()" style="margin-top:8px">
+            <i class="fas fa-layer-group"></i> Process Stack
           </button>
         </div>
       </div>
@@ -1031,6 +1102,18 @@ let pipFile       = null; let pipExt        = '';
 const CROP_MIN_PX = 24;
 const cropState = { x: 0, y: 0, w: 0, h: 0, drag: null };
 
+// ── Operation stack (chaining) state ──────────────────
+// stackMode: when true, ops are queued into `stack` instead of run immediately.
+// Each stack item is { id, op, params } where params is a snapshot of that op's
+// own controls captured at "Add to Stack" time. Trim-dependent values (e.g. the
+// fade-out start time) are intentionally NOT baked in here — they are recomputed
+// at compose time from the live trim so changing the trim updates the chain.
+let stackMode = false;
+const stack   = [];
+let stackSeq  = 0;
+const CHAINABLE = new Set(['crop','resizecompress','rotate','adjust','fade','denoise','sharpenblur','speed','pad','volume']);
+const STACK_ICON = { crop:'fa-crop-simple', resizecompress:'fa-compress', rotate:'fa-rotate-right', adjust:'fa-sliders', fade:'fa-circle-half-stroke', denoise:'fa-broom', sharpenblur:'fa-eye', speed:'fa-bolt', pad:'fa-expand', volume:'fa-volume-high' };
+
 // ── Expose to inline handlers ─────────────────────────
 Object.assign(window, {
   loadFFmpeg, handleFile, clearInput, setOp,
@@ -1038,7 +1121,8 @@ Object.assign(window, {
   resetCropSelection,
   onRawInput2Change, onSubtitleFileChange,
   onOverlayFileChange, onMixAudioFileChange, onConcatFileChange,
-  onSxsFileChange, onPipFileChange
+  onSxsFileChange, onPipFileChange,
+  setMode, addToStack, removeStackItem, moveStackItem, updateStackPreview, runProcessStack
 });
 
 function onSubtitleFileChange(input) {
@@ -1449,10 +1533,18 @@ function updateTrim() {
   fill.style.width = ((ee - ss) / dur * 100) + '%';
   updateSizeEstimate();
   updateRawPreview();
+  updateStackPreview();
 }
 
 // ── Op switcher ───────────────────────────────────────
 function setOp(op) {
+  if (stackMode && !CHAINABLE.has(op)) {
+    const name = (document.getElementById('op-' + op)?.textContent || op).trim();
+    const note = document.getElementById('addStackNote');
+    note.classList.remove('hidden');
+    note.innerHTML = '<i class="fas fa-circle-info"></i> &ldquo;' + name + '&rdquo; is multi-input or whole-file and can&rsquo;t be chained. Use Single mode for it.';
+    return;
+  }
   currentOp = op;
   document.querySelectorAll('.op-tile').forEach(b => b.classList.remove('active'));
   document.getElementById('op-' + op).classList.add('active');
@@ -1462,12 +1554,14 @@ function setOp(op) {
   updateSizeEstimate();
   updateRawPreview();
   updateInfoPanel();
+  refreshStackControls();
 }
 
 // ── Size estimator ────────────────────────────────────────────
 // All figures are heuristic estimates, not guarantees.
 function updateSizeEstimate() {
   const wrap = document.getElementById('sizeEstWrap');
+  if (stackMode) { wrap.classList.add('hidden'); return; }
   if (!inputFile || !vidDur || vidDur <= 0) { wrap.classList.add('hidden'); return; }
 
   const srcSize    = inputFile.size;
@@ -1732,8 +1826,16 @@ async function runProcess() {
         break;
       }
       case 'mute': {
-        ext = 'mp4';
-        args.push('-an','-c:v','libx264','-preset','fast');
+        ext = document.getElementById('singleOutFmt').value;
+        if (ext === 'gif') {
+          args.push('-an','-vf','fps=10,scale=480:-2:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse');
+        } else if (ext === 'webm') {
+          args.push('-an','-c:v','libvpx-vp9','-b:v','0','-crf','30');
+        } else if (ext === 'avi') {
+          args.push('-an','-c:v','mpeg4','-q:v','5');
+        } else {
+          args.push('-an','-c:v','libx264','-preset','fast');
+        }
         break;
       }
       case 'gif': {
@@ -1748,20 +1850,32 @@ async function runProcess() {
       }
       case 'speed': {
         const sp = parseFloat(document.getElementById('speedVal').value);
-        ext = 'mp4';
-        // Build atempo chain (valid range 0.5–2.0 per filter)
+        ext = document.getElementById('singleOutFmt').value;
         const atempoChain = buildAtempo(sp);
-        args.push(
-          '-vf', `setpts=${(1/sp).toFixed(6)}*PTS`,
-          '-af', atempoChain,
-          '-c:v','libx264','-preset','fast'
-        );
+        if (ext === 'gif') {
+          args.push('-vf', `setpts=${(1/sp).toFixed(6)}*PTS,fps=10,scale=480:-2:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse`, '-an');
+        } else if (ext === 'webm') {
+          args.push('-vf', `setpts=${(1/sp).toFixed(6)}*PTS`, '-af', atempoChain, '-c:v','libvpx-vp9','-b:v','0','-crf','30','-c:a','libopus');
+        } else if (ext === 'avi') {
+          args.push('-vf', `setpts=${(1/sp).toFixed(6)}*PTS`, '-af', atempoChain, '-c:v','mpeg4','-q:v','5','-c:a','libmp3lame');
+        } else {
+          args.push('-vf', `setpts=${(1/sp).toFixed(6)}*PTS`, '-af', atempoChain, '-c:v','libx264','-preset','fast');
+        }
         break;
       }
       case 'rotate': {
-        ext = 'mp4';
+        ext = document.getElementById('singleOutFmt').value;
         const vf = { cw90:'transpose=1', ccw90:'transpose=2', '180':'hflip,vflip', hflip:'hflip', vflip:'vflip', hvflip:'hflip,vflip' };
-        args.push('-vf', vf[document.getElementById('rotateVal').value], '-c:v','libx264','-preset','fast','-c:a','aac');
+        const rotVf = vf[document.getElementById('rotateVal').value];
+        if (ext === 'gif') {
+          args.push('-vf', `${rotVf},fps=10,scale=480:-2:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse`, '-an');
+        } else if (ext === 'webm') {
+          args.push('-vf', rotVf, '-c:v','libvpx-vp9','-b:v','0','-crf','30','-c:a','libopus');
+        } else if (ext === 'avi') {
+          args.push('-vf', rotVf, '-c:v','mpeg4','-q:v','5','-c:a','libmp3lame');
+        } else {
+          args.push('-vf', rotVf, '-c:v','libx264','-preset','fast','-c:a','aac');
+        }
         break;
       }
       case 'crop': {
@@ -1771,8 +1885,17 @@ async function runProcess() {
         const cy = parseInt(document.getElementById('cropY').value) || 0;
         const cw = parseInt(document.getElementById('cropW').value) || (srcW - cx);
         const ch = parseInt(document.getElementById('cropH').value) || (srcH - cy);
-        ext = 'mp4';
-        args.push('-vf', `crop=${cw}:${ch}:${cx}:${cy}`, '-c:v','libx264','-preset','fast','-c:a','aac');
+        ext = document.getElementById('singleOutFmt').value;
+        const cropVf = `crop=${cw}:${ch}:${cx}:${cy}`;
+        if (ext === 'gif') {
+          args.push('-vf', `${cropVf},fps=10,scale=480:-2:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse`, '-an');
+        } else if (ext === 'webm') {
+          args.push('-vf', cropVf, '-c:v','libvpx-vp9','-b:v','0','-crf','30','-c:a','libopus');
+        } else if (ext === 'avi') {
+          args.push('-vf', cropVf, '-c:v','mpeg4','-q:v','5','-c:a','libmp3lame');
+        } else {
+          args.push('-vf', cropVf, '-c:v','libx264','-preset','fast','-c:a','aac');
+        }
         break;
       }
       case 'thumbnail': {
@@ -1784,12 +1907,20 @@ async function runProcess() {
         break;
       }
       case 'reverse': {
-        ext = 'mp4';
-        args.push('-vf','reverse','-af','areverse','-c:v','libx264','-preset','fast','-c:a','aac');
+        ext = document.getElementById('singleOutFmt').value;
+        if (ext === 'gif') {
+          args.push('-vf','reverse,fps=10,scale=480:-2:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse','-an');
+        } else if (ext === 'webm') {
+          args.push('-vf','reverse','-af','areverse','-c:v','libvpx-vp9','-b:v','0','-crf','30','-c:a','libopus');
+        } else if (ext === 'avi') {
+          args.push('-vf','reverse','-af','areverse','-c:v','mpeg4','-q:v','5','-c:a','libmp3lame');
+        } else {
+          args.push('-vf','reverse','-af','areverse','-c:v','libx264','-preset','fast','-c:a','aac');
+        }
         break;
       }
       case 'fade': {
-        ext = 'mp4';
+        ext = document.getElementById('singleOutFmt').value;
         const trimS2 = parseFloat(document.getElementById('trimStart').value) || 0;
         const trimE2 = parseFloat(document.getElementById('trimEnd').value)   || vidDur;
         const clipDur = trimE2 - trimS2;
@@ -1798,21 +1929,49 @@ async function runProcess() {
         const vFilters = [], aFilters = [];
         if (fi > 0) { vFilters.push(`fade=t=in:st=0:d=${fi}`);           aFilters.push(`afade=t=in:st=0:d=${fi}`); }
         if (fo > 0) { vFilters.push(`fade=t=out:st=${(clipDur-fo).toFixed(3)}:d=${fo}`); aFilters.push(`afade=t=out:st=${(clipDur-fo).toFixed(3)}:d=${fo}`); }
-        if (vFilters.length) args.push('-vf', vFilters.join(','), '-af', aFilters.join(','));
-        args.push('-c:v','libx264','-preset','fast','-c:a','aac');
+        if (ext === 'gif') {
+          const fadeVf = (vFilters.length ? vFilters.join(',') + ',' : '') + 'fps=10,scale=480:-2:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse';
+          args.push('-vf', fadeVf, '-an');
+        } else if (ext === 'webm') {
+          if (vFilters.length) args.push('-vf', vFilters.join(','), '-af', aFilters.join(','));
+          args.push('-c:v','libvpx-vp9','-b:v','0','-crf','30','-c:a','libopus');
+        } else if (ext === 'avi') {
+          if (vFilters.length) args.push('-vf', vFilters.join(','), '-af', aFilters.join(','));
+          args.push('-c:v','mpeg4','-q:v','5','-c:a','libmp3lame');
+        } else {
+          if (vFilters.length) args.push('-vf', vFilters.join(','), '-af', aFilters.join(','));
+          args.push('-c:v','libx264','-preset','fast','-c:a','aac');
+        }
         break;
       }
       case 'adjust': {
-        ext = 'mp4';
+        ext = document.getElementById('singleOutFmt').value;
         const br  = document.getElementById('adjBright').value;
         const con = document.getElementById('adjContrast').value;
         const sat = document.getElementById('adjGray').checked ? '0' : document.getElementById('adjSat').value;
-        args.push('-vf', `eq=brightness=${br}:contrast=${con}:saturation=${sat}`, '-c:v','libx264','-preset','fast','-c:a','aac');
+        const eqVf = `eq=brightness=${br}:contrast=${con}:saturation=${sat}`;
+        if (ext === 'gif') {
+          args.push('-vf', `${eqVf},fps=10,scale=480:-2:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse`, '-an');
+        } else if (ext === 'webm') {
+          args.push('-vf', eqVf, '-c:v','libvpx-vp9','-b:v','0','-crf','30','-c:a','libopus');
+        } else if (ext === 'avi') {
+          args.push('-vf', eqVf, '-c:v','mpeg4','-q:v','5','-c:a','libmp3lame');
+        } else {
+          args.push('-vf', eqVf, '-c:v','libx264','-preset','fast','-c:a','aac');
+        }
         break;
       }
       case 'stripmeta': {
-        ext = 'mp4';
-        args.push('-map_metadata','-1','-c:v','libx264','-preset','fast','-c:a','aac');
+        ext = document.getElementById('singleOutFmt').value;
+        if (ext === 'gif') {
+          args.push('-map_metadata','-1','-vf','fps=10,scale=480:-2:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse','-an');
+        } else if (ext === 'webm') {
+          args.push('-map_metadata','-1','-c:v','libvpx-vp9','-b:v','0','-crf','30','-c:a','libopus');
+        } else if (ext === 'avi') {
+          args.push('-map_metadata','-1','-c:v','mpeg4','-q:v','5','-c:a','libmp3lame');
+        } else {
+          args.push('-map_metadata','-1','-c:v','libx264','-preset','fast','-c:a','aac');
+        }
         break;
       }
       case 'subtitles': {
@@ -1830,8 +1989,16 @@ async function runProcess() {
       }
       case 'volume': {
         const vol = parseFloat(document.getElementById('volRange').value).toFixed(3);
-        ext = 'mp4';
-        args.push('-af', `volume=${vol}`, '-c:v', 'copy');
+        ext = document.getElementById('singleOutFmt').value;
+        if (ext === 'gif') {
+          args.push('-af', `volume=${vol}`, '-vf','fps=10,scale=480:-2:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse', '-an');
+        } else if (ext === 'webm') {
+          args.push('-af', `volume=${vol}`, '-c:v','copy', '-c:a','libopus');
+        } else if (ext === 'avi') {
+          args.push('-af', `volume=${vol}`, '-c:v','copy', '-c:a','libmp3lame');
+        } else {
+          args.push('-af', `volume=${vol}`, '-c:v', 'copy');
+        }
         break;
       }
       case 'loop': {
@@ -1977,30 +2144,60 @@ async function runProcess() {
           tH = srcH;
           tW = Math.round(srcH * targetAR / 2) * 2;
         }
-        ext = 'mp4';
-        args.push('-vf', `pad=${tW}:${tH}:(ow-iw)/2:(oh-ih)/2:${color}`, '-c:v', 'libx264', '-preset', 'fast', '-c:a', 'aac');
+        ext = document.getElementById('singleOutFmt').value;
+        const padVf = `pad=${tW}:${tH}:(ow-iw)/2:(oh-ih)/2:${color}`;
+        if (ext === 'gif') {
+          args.push('-vf', `${padVf},fps=10,scale=480:-2:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse`, '-an');
+        } else if (ext === 'webm') {
+          args.push('-vf', padVf, '-c:v','libvpx-vp9','-b:v','0','-crf','30','-c:a','libopus');
+        } else if (ext === 'avi') {
+          args.push('-vf', padVf, '-c:v','mpeg4','-q:v','5','-c:a','libmp3lame');
+        } else {
+          args.push('-vf', padVf, '-c:v','libx264','-preset','fast','-c:a','aac');
+        }
         break;
       }
       case 'normalize': {
         const target = document.getElementById('normalizeTarget').value;
-        ext = 'mp4';
-        args.push('-af', `loudnorm=I=${target}:LRA=11:TP=-1.5`, '-c:v', 'copy');
+        ext = document.getElementById('singleOutFmt').value;
+        if (ext === 'gif') {
+          args.push('-af', `loudnorm=I=${target}:LRA=11:TP=-1.5`, '-vf','fps=10,scale=480:-2:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse', '-an');
+        } else if (ext === 'webm') {
+          args.push('-af', `loudnorm=I=${target}:LRA=11:TP=-1.5`, '-c:v','copy', '-c:a','libopus');
+        } else if (ext === 'avi') {
+          args.push('-af', `loudnorm=I=${target}:LRA=11:TP=-1.5`, '-c:v','copy', '-c:a','libmp3lame');
+        } else {
+          args.push('-af', `loudnorm=I=${target}:LRA=11:TP=-1.5`, '-c:v','copy');
+        }
         break;
       }
       case 'denoise': {
         const str    = document.getElementById('denoiseStrength').value;
         const params = { light: '2:2:3:3', medium: '4:4:6:6', heavy: '10:10:15:15' }[str];
-        ext = 'mp4';
-        args.push('-vf', `hqdn3d=${params}`, '-c:v', 'libx264', '-preset', 'fast', '-c:a', 'copy');
+        ext = document.getElementById('singleOutFmt').value;
+        const denoiseVf = `hqdn3d=${params}`;
+        if (ext === 'gif') {
+          args.push('-vf', `${denoiseVf},fps=10,scale=480:-2:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse`, '-an');
+        } else if (ext === 'webm') {
+          args.push('-vf', denoiseVf, '-c:v','libvpx-vp9','-b:v','0','-crf','30','-c:a','libopus');
+        } else if (ext === 'avi') {
+          args.push('-vf', denoiseVf, '-c:v','mpeg4','-q:v','5','-c:a','libmp3lame');
+        } else {
+          args.push('-vf', denoiseVf, '-c:v', 'libx264', '-preset', 'fast', '-c:a', 'copy');
+        }
         break;
       }
       case 'boomerang': {
-        ext = 'mp4';
-        args.push(
-          '-filter_complex', '[0:v]reverse[rv];[0:v][rv]concat=n=2:v=1:a=0[outv]',
-          '-map', '[outv]', '-an',
-          '-c:v', 'libx264', '-preset', 'fast'
-        );
+        ext = document.getElementById('singleOutFmt').value;
+        if (ext === 'gif') {
+          args.push('-filter_complex', '[0:v]reverse[rv];[0:v][rv]concat=n=2:v=1:a=0[outv]', '-map', '[outv]', '-an', '-vf','fps=10,scale=480:-2:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse');
+        } else if (ext === 'webm') {
+          args.push('-filter_complex', '[0:v]reverse[rv];[0:v][rv]concat=n=2:v=1:a=0[outv]', '-map', '[outv]', '-an', '-c:v','libvpx-vp9','-b:v','0','-crf','30');
+        } else if (ext === 'avi') {
+          args.push('-filter_complex', '[0:v]reverse[rv];[0:v][rv]concat=n=2:v=1:a=0[outv]', '-map', '[outv]', '-an', '-c:v','mpeg4','-q:v','5');
+        } else {
+          args.push('-filter_complex', '[0:v]reverse[rv];[0:v][rv]concat=n=2:v=1:a=0[outv]', '-map', '[outv]', '-an', '-c:v','libx264','-preset','fast');
+        }
         break;
       }
       case 'sharpenblur': {
@@ -2010,8 +2207,17 @@ async function runProcess() {
           sharpen: { light: 'unsharp=3:3:0.8:3:3:0', medium: 'unsharp=5:5:1.5:5:5:0', heavy: 'unsharp=7:7:3:7:7:0' },
           blur:    { light: 'boxblur=3:1', medium: 'boxblur=6:1', heavy: 'boxblur=12:1' },
         };
-        ext = 'mp4';
-        args.push('-vf', vfMap[mode][str], '-c:v', 'libx264', '-preset', 'fast', '-c:a', 'copy');
+        ext = document.getElementById('singleOutFmt').value;
+        const sbVf = vfMap[mode][str];
+        if (ext === 'gif') {
+          args.push('-vf', `${sbVf},fps=10,scale=480:-2:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse`, '-an');
+        } else if (ext === 'webm') {
+          args.push('-vf', sbVf, '-c:v','libvpx-vp9','-b:v','0','-crf','30','-c:a','libopus');
+        } else if (ext === 'avi') {
+          args.push('-vf', sbVf, '-c:v','mpeg4','-q:v','5','-c:a','libmp3lame');
+        } else {
+          args.push('-vf', sbVf, '-c:v', 'libx264', '-preset', 'fast', '-c:a', 'copy');
+        }
         break;
       }
     }
@@ -2026,33 +2232,7 @@ async function runProcess() {
     addLog('Done!', 'ok');
 
     const data = await ffmpeg.readFile(outName);
-    outBlob = new Blob([data.buffer], { type: mime(ext) });
-    // Use a data: URL — no blob: URL means no range-request failures.
-    const url = await blobToDataURL(outBlob);
-
-    const audioExts = ['mp3','aac','wav','ogg','flac'];
-    const imageExts = ['jpg','png'];
-    const ov  = document.getElementById('outVideo');
-    const oa  = document.getElementById('outAudio');
-    const oaw = document.getElementById('outAudioWrap');
-    const oim = document.getElementById('outImg');
-
-    document.getElementById('outEmpty').classList.add('hidden');
-    document.getElementById('outContent').classList.remove('hidden');
-
-    if (audioExts.includes(ext)) {
-      ov.classList.add('hidden'); oaw.classList.remove('hidden'); oim.classList.add('hidden');
-      oa.src = url;
-    } else if (imageExts.includes(ext)) {
-      ov.classList.add('hidden'); oaw.classList.add('hidden'); oim.classList.remove('hidden');
-      oim.src = url;
-    } else {
-      ov.classList.remove('hidden'); oaw.classList.add('hidden'); oim.classList.add('hidden');
-      ov.src = url;
-    }
-
-    document.getElementById('outMeta').textContent = `${fmtBytes(data.buffer.byteLength)} · ${ext.toUpperCase()}`;
-    document.getElementById('dlBtn').innerHTML = `<i class="fas fa-download"></i> Download output.${ext}`;
+    await renderOutput(data, ext);
 
     // Clean up virtual FS
     await ffmpeg.deleteFile(inName).catch(() => {});
@@ -2116,6 +2296,8 @@ function syncProcessBtn() {
     btn.disabled = false;
     btn.innerHTML = '<i class="fas fa-gear"></i> Process Video';
   }
+  refreshStackControls();
+  if (stackMode) renderStack();
 }
 
 function addLog(msg, type = '', icon = '') {
@@ -2164,6 +2346,346 @@ function mime(ext) {
 // Init trim display
 updateTrim();
 initRawExamples();
+
+// ── Shared output renderer ────────────────────────────
+// Used by both the single-op runProcess() and the stack runProcessStack() so the
+// result-display logic lives in exactly one place.
+async function renderOutput(data, ext) {
+  outExt  = ext;
+  outBlob = new Blob([data.buffer], { type: mime(ext) });
+  // Use a data: URL — no blob: URL means no range-request failures.
+  const url = await blobToDataURL(outBlob);
+
+  const audioExts = ['mp3','aac','wav','ogg','flac'];
+  const imageExts = ['jpg','png'];
+  const ov  = document.getElementById('outVideo');
+  const oa  = document.getElementById('outAudio');
+  const oaw = document.getElementById('outAudioWrap');
+  const oim = document.getElementById('outImg');
+
+  document.getElementById('outEmpty').classList.add('hidden');
+  document.getElementById('outContent').classList.remove('hidden');
+
+  if (audioExts.includes(ext)) {
+    ov.classList.add('hidden'); oaw.classList.remove('hidden'); oim.classList.add('hidden');
+    oa.src = url;
+  } else if (imageExts.includes(ext)) {
+    ov.classList.add('hidden'); oaw.classList.add('hidden'); oim.classList.remove('hidden');
+    oim.src = url;
+  } else {
+    ov.classList.remove('hidden'); oaw.classList.add('hidden'); oim.classList.add('hidden');
+    ov.src = url;
+  }
+
+  document.getElementById('outMeta').textContent = `${fmtBytes(data.buffer.byteLength)} · ${ext.toUpperCase()}`;
+  document.getElementById('dlBtn').innerHTML = `<i class="fas fa-download"></i> Download output.${ext}`;
+}
+
+// ── Operation stack: composition core ─────────────────
+// THE PART WHERE CORRECTNESS MATTERS MOST.
+//
+// Each chainable op contributes one or more filter *fragments*: video fragments
+// go into a single `-vf "a,b,c"` chain and audio fragments into a single
+// `-af "x,y"` chain, both in stack order. The whole chain is encoded ONCE at the
+// end (container/codec chosen by the stack's output-format selector). Trim, if
+// set, is applied as input seeking (-ss before -i, -t after) exactly like the
+// single-op path — it is NOT a filter and never enters the chain.
+//
+// Only single-input, frame-wise video/audio filters are chainable. Multi-input
+// (overlay/concat/sxs/pip/mixaudio/subtitles), stream/container flags
+// (convert/mute/audio/stripmeta/loop/normalize/info/raw) and whole-clip /
+// different-output-type ops (gif/thumbnail/reverse/boomerang) are excluded.
+//
+// Ordering note: `speed` (setpts/atempo) and `fade` both touch the timeline. The
+// chain respects the user's literal order; a fade added before a later speed
+// change is NOT rescaled by that speed change. This is intentional for v1.
+function opToFilters(item, ctx) {
+  const p = item.params;
+  const ROT     = { cw90:'transpose=1', ccw90:'transpose=2', '180':'hflip,vflip', hflip:'hflip', vflip:'vflip', hvflip:'hflip,vflip' };
+  const DENOISE = { light:'2:2:3:3', medium:'4:4:6:6', heavy:'10:10:15:15' };
+  const SB      = { sharpen:{ light:'unsharp=3:3:0.8:3:3:0', medium:'unsharp=5:5:1.5:5:5:0', heavy:'unsharp=7:7:3:7:7:0' },
+                    blur:   { light:'boxblur=3:1', medium:'boxblur=6:1', heavy:'boxblur=12:1' } };
+  switch (item.op) {
+    case 'crop':           return { vf: [`crop=${p.w}:${p.h}:${p.x}:${p.y}`] };
+    case 'resizecompress': return { vf: [`scale=${p.w}:${p.h}`] };
+    case 'rotate':         return { vf: [ROT[p.mode]] };
+    case 'adjust':         return { vf: [`eq=brightness=${p.br}:contrast=${p.con}:saturation=${p.sat}`] };
+    case 'denoise':        return { vf: [`hqdn3d=${DENOISE[p.str]}`] };
+    case 'sharpenblur':    return { vf: [SB[p.mode][p.str]] };
+    case 'pad':            return { vf: [`pad=${p.tW}:${p.tH}:(ow-iw)/2:(oh-ih)/2:${p.color}`] };
+    case 'volume':         return { af: [`volume=${p.vol}`] };
+    case 'speed':          return { vf: [`setpts=${(1/p.sp).toFixed(6)}*PTS`], af: [buildAtempo(p.sp)] };
+    case 'fade': {
+      const vf = [], af = [];
+      if (p.fi > 0) { vf.push(`fade=t=in:st=0:d=${p.fi}`); af.push(`afade=t=in:st=0:d=${p.fi}`); }
+      if (p.fo > 0) {
+        const st = Math.max(0, ctx.clipDur - p.fo).toFixed(3);
+        vf.push(`fade=t=out:st=${st}:d=${p.fo}`); af.push(`afade=t=out:st=${st}:d=${p.fo}`);
+      }
+      return { vf, af };
+    }
+    default: return {};
+  }
+}
+
+// Snapshot the currently-selected op's own controls into a plain params object.
+function captureStackParams(op) {
+  const roundEven = v => { const n = parseInt(v); if (isNaN(n) || n < 0) return '-2'; return String(Math.round(n / 2) * 2 || 2); };
+  const vid = document.getElementById('inputVideo');
+  const srcW = vid.videoWidth || 1920, srcH = vid.videoHeight || 1080;
+  switch (op) {
+    case 'crop': {
+      const x = parseInt(document.getElementById('cropX').value) || 0;
+      const y = parseInt(document.getElementById('cropY').value) || 0;
+      const w = parseInt(document.getElementById('cropW').value) || (srcW - x);
+      const h = parseInt(document.getElementById('cropH').value) || (srcH - y);
+      return { x, y, w, h };
+    }
+    case 'resizecompress': {
+      const wRaw = document.getElementById('rcW').value.trim();
+      const hRaw = document.getElementById('rcH').value.trim();
+      return { w: wRaw ? roundEven(wRaw) : '-2', h: hRaw ? roundEven(hRaw) : '-2' };
+    }
+    case 'rotate':      return { mode: document.getElementById('rotateVal').value };
+    case 'adjust':      return {
+      br:  document.getElementById('adjBright').value,
+      con: document.getElementById('adjContrast').value,
+      sat: document.getElementById('adjGray').checked ? '0' : document.getElementById('adjSat').value,
+      gray: document.getElementById('adjGray').checked
+    };
+    case 'fade':        return {
+      fi: parseFloat(document.getElementById('fadeIn').value)  || 0,
+      fo: parseFloat(document.getElementById('fadeOut').value) || 0
+    };
+    case 'denoise':     return { str: document.getElementById('denoiseStrength').value };
+    case 'sharpenblur': return { mode: document.getElementById('sbMode').value, str: document.getElementById('sbStrength').value };
+    case 'speed':       return { sp: parseFloat(document.getElementById('speedVal').value) || 2 };
+    case 'volume':      return { vol: parseFloat(document.getElementById('volRange').value).toFixed(3) };
+    case 'pad': {
+      const [aw, ah]  = document.getElementById('padAR').value.split(':').map(Number);
+      const color     = document.getElementById('padColor').value;
+      const targetAR  = aw / ah;
+      let tW, tH;
+      if (srcW / srcH > targetAR) { tW = srcW; tH = Math.round(srcW / targetAR / 2) * 2; }
+      else                        { tH = srcH; tW = Math.round(srcH * targetAR / 2) * 2; }
+      return { tW, tH, color };
+    }
+    default: return null;
+  }
+}
+
+function stackItemLabel(op, p) {
+  switch (op) {
+    case 'crop':           return `Crop ${p.w}×${p.h}`;
+    case 'resizecompress': return `Scale ${p.w}×${p.h}`;
+    case 'rotate':         return 'Rotate / Flip — ' + ({ cw90:'90° CW', ccw90:'90° CCW', '180':'180°', hflip:'H-flip', vflip:'V-flip', hvflip:'HV-flip' }[p.mode] || p.mode);
+    case 'adjust':         return p.gray ? 'Grayscale' : `Adjust (br ${p.br} · con ${p.con} · sat ${p.sat})`;
+    case 'fade':           return `Fade in ${p.fi}s / out ${p.fo}s`;
+    case 'denoise':        return `Denoise ${p.str}`;
+    case 'sharpenblur':    return `${p.mode === 'sharpen' ? 'Sharpen' : 'Blur'} ${p.str}`;
+    case 'speed':          return `Speed ${p.sp}×`;
+    case 'pad':            return `Pad ${p.tW}×${p.tH}`;
+    case 'volume':         return `Volume ${Math.round(parseFloat(p.vol) * 100)}%`;
+  }
+  return op;
+}
+
+// Get codec args for a given output format.
+function getFormatCodecArgs(fmt) {
+  if (fmt === 'webm') {
+    return ['-c:v','libvpx-vp9','-b:v','0','-crf','30','-c:a','libopus'];
+  } else if (fmt === 'gif') {
+    return [];
+  } else if (fmt === 'avi') {
+    return ['-c:v','mpeg4','-q:v','5','-c:a','libmp3lame'];
+  } else {
+    return ['-c:v','libx264','-preset','fast','-c:a','aac'];
+  }
+}
+
+// Build the full args array (for exec) AND a readable preview string from the
+// current stack + trim + output format. Single source of truth for both.
+function composeStackCommand() {
+  const inN     = 'input.' + (inputExt || 'mp4');
+  const outFmt  = document.getElementById('stackOutFmt').value;
+  const trimS   = parseFloat(document.getElementById('trimStart').value) || 0;
+  const trimE   = parseFloat(document.getElementById('trimEnd').value)   || vidDur;
+  const hasTrim = trimS > 0 || (vidDur > 0 && trimE < vidDur - 0.05);
+  const clipDur = (hasTrim ? (trimE - trimS) : vidDur) || 0;
+  const ctx     = { clipDur };
+
+  const vf = [], af = [];
+  for (const item of stack) {
+    const f = opToFilters(item, ctx);
+    if (f.vf) vf.push(...f.vf);
+    if (f.af) af.push(...f.af);
+  }
+
+  const encode = getFormatCodecArgs(outFmt);
+
+  // args: raw values for ffmpeg.exec (no shell quoting).
+  const args = [];
+  if (hasTrim) args.push('-ss', trimS.toFixed(3));
+  args.push('-i', inN);
+  if (hasTrim) args.push('-t', (trimE - trimS).toFixed(3));
+  if (vf.length) args.push('-vf', vf.join(','));
+  if (af.length) args.push('-af', af.join(','));
+  args.push(...encode);
+  args.push('output.' + outFmt);
+
+  // preview: same command, but filter chains wrapped in quotes for readability.
+  const pre = ['ffmpeg'];
+  if (hasTrim) pre.push('-ss', trimS.toFixed(3));
+  pre.push('-i', inN);
+  if (hasTrim) pre.push('-t', (trimE - trimS).toFixed(3));
+  if (vf.length) pre.push('-vf', `"${vf.join(',')}"`);
+  if (af.length) pre.push('-af', `"${af.join(',')}"`);
+  pre.push(...encode);
+  pre.push('output.' + outFmt);
+
+  return { args, outFmt, preview: pre.join(' '), empty: stack.length === 0 };
+}
+
+// ── Operation stack: UI ───────────────────────────────
+function updateStackPreview() {
+  const el = document.getElementById('stackPreview');
+  if (!el) return;
+  if (stack.length === 0) { el.textContent = '(stack is empty — add operations above)'; return; }
+  if (!inputFile)         { el.textContent = '(load a file first)'; return; }
+  el.textContent = composeStackCommand().preview;
+}
+
+function renderStack() {
+  const list = document.getElementById('stackList');
+  if (!list) return;
+  if (stack.length === 0) {
+    list.innerHTML = '<div class="stack-empty">No operations yet — configure an op above and click &ldquo;Add to Stack&rdquo;.</div>';
+  } else {
+    list.innerHTML = stack.map((it, i) => `
+      <div class="stack-item">
+        <span class="stack-idx">${i + 1}</span>
+        <span class="stack-label"><i class="fas ${STACK_ICON[it.op] || 'fa-gear'}"></i> ${stackItemLabel(it.op, it.params)}</span>
+        <span class="stack-controls">
+          <button class="stack-mini" title="Move up" onclick="moveStackItem(${i},-1)" ${i === 0 ? 'disabled' : ''}><i class="fas fa-arrow-up"></i></button>
+          <button class="stack-mini" title="Move down" onclick="moveStackItem(${i},1)" ${i === stack.length - 1 ? 'disabled' : ''}><i class="fas fa-arrow-down"></i></button>
+          <button class="stack-mini danger" title="Remove" onclick="removeStackItem(${i})"><i class="fas fa-xmark"></i></button>
+        </span>
+      </div>`).join('');
+  }
+  const pbtn = document.getElementById('processStackBtn');
+  pbtn.disabled  = stack.length === 0 || !inputFile;
+  pbtn.innerHTML = `<i class="fas fa-layer-group"></i> Process Stack${stack.length ? ` (${stack.length})` : ''}`;
+  updateStackPreview();
+}
+
+function addToStack() {
+  if (!CHAINABLE.has(currentOp) || !inputFile) return;
+  const params = captureStackParams(currentOp);
+  if (!params) return;
+  stack.push({ id: ++stackSeq, op: currentOp, params });
+  renderStack();
+}
+
+function removeStackItem(i) {
+  stack.splice(i, 1);
+  renderStack();
+}
+
+function moveStackItem(i, dir) {
+  const j = i + dir;
+  if (j < 0 || j >= stack.length) return;
+  [stack[i], stack[j]] = [stack[j], stack[i]];
+  renderStack();
+}
+
+// Enable/disable "Add to Stack" and show the exclusion note for the current op.
+function refreshStackControls() {
+  if (!stackMode) return;
+  const addBtn = document.getElementById('addStackBtn');
+  const note   = document.getElementById('addStackNote');
+  if (!addBtn || !note) return;
+  const ok = CHAINABLE.has(currentOp);
+  addBtn.disabled = !ok || !inputFile;
+  if (ok) {
+    note.classList.add('hidden');
+    note.innerHTML = '';
+  } else {
+    const name = (document.getElementById('op-' + currentOp)?.textContent || currentOp).trim();
+    note.classList.remove('hidden');
+    note.innerHTML = `<i class="fas fa-circle-info"></i> &ldquo;${name}&rdquo; is multi-input or whole-file and can&rsquo;t be chained. Use Single mode for it.`;
+  }
+}
+
+function setMode(mode) {
+  stackMode = (mode === 'stack');
+  document.getElementById('modeSingle').classList.toggle('active', !stackMode);
+  document.getElementById('modeStack').classList.toggle('active', stackMode);
+  document.getElementById('singleOutFmtWrap').classList.toggle('hidden', stackMode);
+  document.getElementById('processBtn').classList.toggle('hidden', stackMode);
+  document.getElementById('addStackBtn').classList.toggle('hidden', !stackMode);
+  document.getElementById('processStackBtn').classList.toggle('hidden', !stackMode);
+  document.getElementById('stackSection').classList.toggle('hidden', !stackMode);
+  document.querySelectorAll('.op-tile').forEach(tile => {
+    const opId = tile.id.replace('op-', '');
+    tile.classList.toggle('disabled', stackMode && !CHAINABLE.has(opId));
+  });
+  updateSizeEstimate();
+  refreshStackControls();
+  renderStack();
+}
+
+// ── Process stack ─────────────────────────────────────
+async function runProcessStack() {
+  if (!inputFile || stack.length === 0) return;
+
+  if (!isLoaded()) {
+    await loadFFmpeg();
+    if (!isLoaded()) return;
+  }
+
+  const btn  = document.getElementById('processStackBtn');
+  const orig = btn.innerHTML;
+  btn.disabled  = true;
+  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing…';
+
+  const pw = document.getElementById('progWrap');
+  pw.classList.remove('hidden');
+  document.getElementById('progFill').style.width = '0%';
+  document.getElementById('progPct').textContent  = '0%';
+
+  const inName = 'input.' + inputExt;
+  let outName  = '';
+  try {
+    await requestWakeLock();
+    addLog('Writing input file…', 'ok');
+    await ffmpeg.writeFile(inName, await fetchFile(inputFile));
+
+    const { args, outFmt } = composeStackCommand();
+    outName = 'output.' + outFmt;
+
+    addLog('ffmpeg ' + args.join(' '), 'ok');
+    const exitCode = await ffmpeg.exec(args);
+    if (exitCode !== 0) throw new Error(`ffmpeg exited with code ${exitCode} — check the composed command.`);
+    addLog('Done!', 'ok');
+
+    const data = await ffmpeg.readFile(outName);
+    await renderOutput(data, outFmt);
+
+    await ffmpeg.deleteFile(inName).catch(() => {});
+    await ffmpeg.deleteFile(outName).catch(() => {});
+  } catch (err) {
+    const errMsg = (err instanceof Error ? err.message : String(err)) || 'unknown error';
+    addLog('Error: ' + errMsg, 'err');
+    try { await ffmpeg.deleteFile(inName); } catch (_) {}
+    try { if (outName) await ffmpeg.deleteFile(outName); } catch (_) {}
+    console.error(err);
+  } finally {
+    pw.classList.add('hidden');
+    btn.disabled  = false;
+    btn.innerHTML = orig;
+    releaseWakeLock();
+  }
+}
 
 // ── PWA Install Prompt ─────────────────────────────────────────
 // Let the browser handle native install UI in the address bar
