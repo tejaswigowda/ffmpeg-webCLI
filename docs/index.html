@@ -14,6 +14,7 @@
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect fill='%235f7fe8' width='192' height='192' rx='45'/><path d='M60 80l48-28v96L60 120z' fill='%230d0f1a'/></svg>">
   <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect fill='%235f7fe8' width='192' height='192' rx='45'/><path d='M60 80l48-28v96L60 120z' fill='%230d0f1a'/></svg>">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <style>
     :root {
       --bg: #0d0f1a;
@@ -1068,8 +1069,16 @@
           <!-- Batch outputs -->
           <div id="batchOutputsWrap" class="hidden">
             <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
-              <div style="font-size:0.85rem;font-weight:600;color:var(--muted);margin-bottom:8px;">Batch Outputs (<span id="batchCompleteCount">0</span>)</div>
-              <div id="batchOutputsList" style="display:grid;gap:8px;"></div>
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+                <div style="font-size:0.85rem;font-weight:600;color:var(--muted);">Batch Outputs (<span id="batchCompleteCount">0</span>)</div>
+                <button class="btn btn-sm" id="downloadAllZipBtn" onclick="downloadBatchAllAsZip()" title="Download all as ZIP" style="display:none;"><i class="fas fa-archive"></i> Download All</button>
+              </div>
+              <div id="batchOutputsPreview" style="margin-bottom:12px;padding:8px;background:var(--surface2);border-radius:6px;display:none;">
+                <select id="batchOutputSelect" onchange="selectBatchOutput(this.value)" style="width:100%;padding:6px;border-radius:4px;background:var(--surface3);color:var(--text);border:1px solid var(--border);margin-bottom:8px;">
+                  <option value="">-- Select file to preview --</option>
+                </select>
+                <div id="batchSelectedFileInfo" style="font-size:0.85rem;line-height:1.5;color:var(--muted);"></div>
+              </div>
             </div>
           </div>
         </div>
@@ -2688,10 +2697,12 @@ async function processBatchFile(item) {
 function updateBatchOutputsDisplay() {
   const completed = batchQueue.filter(item => item.status === 'done');
   const wrap = document.getElementById('batchOutputsWrap');
-  const list = document.getElementById('batchOutputsList');
   const count = document.getElementById('batchCompleteCount');
+  const selectEl = document.getElementById('batchOutputSelect');
+  const previewEl = document.getElementById('batchOutputsPreview');
+  const downloadAllBtn = document.getElementById('downloadAllZipBtn');
   
-  if (!wrap || !list) return; // Elements don't exist in this mode
+  if (!wrap) return; // Elements don't exist in this mode
   
   count.textContent = completed.length;
   
@@ -2701,19 +2712,72 @@ function updateBatchOutputsDisplay() {
   }
   
   wrap.classList.remove('hidden');
-  list.innerHTML = completed.map((item, idx) => {
-    const batchIdx = batchQueue.indexOf(item);
-    const sizeMB = item.output.size / 1024 / 1024;
-    return `
-      <div style="display:flex;gap:8px;align-items:center;padding:8px;background:var(--surface2);border-radius:6px;">
-        <div style="flex:1;">
-          <div style="font-size:0.85rem;font-weight:500;">${item.file.name}</div>
-          <div style="font-size:0.75rem;color:var(--muted);">→ ${item.outputName} (${sizeMB.toFixed(2)}MB)</div>
-        </div>
-        <button class="btn btn-sm" onclick="downloadBatchFile(${batchIdx})" title="Download"><i class="fas fa-download"></i></button>
-      </div>
-    `;
-  }).join('');
+  
+  // Update dropdown
+  selectEl.innerHTML = '<option value="">-- Select file to preview --</option>' +
+    completed.map((item, idx) => {
+      const batchIdx = batchQueue.indexOf(item);
+      const sizeMB = item.output.size / 1024 / 1024;
+      return `<option value="${batchIdx}">${item.file.name} → ${item.outputName} (${sizeMB.toFixed(2)}MB)</option>`;
+    }).join('');
+  
+  // Show preview section and download all button
+  previewEl.style.display = 'block';
+  downloadAllBtn.style.display = 'block';
+  
+  // If first item, auto-select it
+  if (selectEl.selectedIndex === 0 && completed.length > 0) {
+    selectEl.selectedIndex = 1;
+    selectBatchOutput(completed[0] ? batchQueue.indexOf(completed[0]) : '');
+  }
+}
+
+function selectBatchOutput(batchIdx) {
+  if (!batchIdx) return;
+  const item = batchQueue[parseInt(batchIdx)];
+  if (!item) return;
+  
+  const infoDiv = document.getElementById('batchSelectedFileInfo');
+  const sizeMB = item.output.size / 1024 / 1024;
+  
+  infoDiv.innerHTML = `
+    <strong>Input:</strong> ${item.file.name}<br>
+    <strong>Output:</strong> ${item.outputName}<br>
+    <strong>Size:</strong> ${sizeMB.toFixed(2)}MB<br>
+    <strong>Status:</strong> <span style="color:var(--success);">✓ Complete</span><br>
+    <button class="btn btn-sm" onclick="downloadBatchFile(${batchIdx})" style="margin-top:8px;"><i class="fas fa-download"></i> Download Individual</button>
+  `;
+}
+
+async function downloadBatchAllAsZip() {
+  const completed = batchQueue.filter(item => item.status === 'done');
+  if (completed.length === 0) {
+    addLog('No completed files to download', 'warn');
+    return;
+  }
+  
+  addLog('Creating ZIP archive…', 'ok');
+  const zip = new JSZip();
+  
+  try {
+    completed.forEach(item => {
+      zip.file(item.outputName, item.output);
+    });
+    
+    const zipBlob = await zip.generateAsync({ type: 'blob' });
+    const url = URL.createObjectURL(zipBlob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `batch_outputs_${Date.now()}.zip`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    
+    addLog(`Downloaded all ${completed.length} files as ZIP`, 'ok');
+  } catch (err) {
+    addLog(`Error creating ZIP: ${err.message}`, 'error');
+  }
 }
 
 function buildOperationArgs(args, videoEl, inputExt) {
