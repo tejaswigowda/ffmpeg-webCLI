@@ -22,7 +22,7 @@
       --surface3: #252a42;
       --accent: #3665b6;
       --accent-h: #81e2f8;
-      --success: #22c55e;
+      --success: #70db97;
       --danger: #ef4444;
       --warn: #f59e0b;
       --text: #e2e8f0;
@@ -156,6 +156,7 @@
     .batch-file-actions { flex-shrink: 0; display: flex; gap: 6px; }
     .batch-btn-sm { border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 4px; padding: 4px 6px; cursor: pointer; font-size: 0.65rem; transition: 150ms; }
     .batch-btn-sm:hover { border-color: var(--accent); color: var(--accent); background: var(--surface2); }
+    .card.disabled { opacity: 0.5; pointer-events: none; }
     .stack-mini.danger:hover:not(:disabled) { color: var(--danger); border-color: var(--danger); }
     .stack-mini:disabled { opacity: .3; cursor: not-allowed; }
     .stack-note { font-size: 0.78rem; color: var(--warn); background: rgba(234,179,8,.08); border: 1px solid rgba(234,179,8,.25); border-radius: 7px; padding: 9px 11px; margin-top: 6px; display: flex; align-items: center; gap: 7px; }
@@ -353,9 +354,10 @@
       </div>
 
       <!-- Trim -->
-      <div class="card">
+      <div class="card" id="trimCard">
         <div class="card-header">
           Trim <span class="tag">applied to all operations</span>
+          <span class="tag" id="batchTrimWarning" style="background:#d97706;display:none;margin-left:8px;">Disabled in batch mode</span>
         </div>
         <div class="card-body">
           <p class="hint" style="margin-bottom:8px">Drag the handles to set start and end. Leave untouched to keep the full video.</p>
@@ -1063,6 +1065,13 @@
               <span class="out-size" id="outMeta"></span>
             </div>
           </div>
+          <!-- Batch outputs -->
+          <div id="batchOutputsWrap" class="hidden">
+            <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
+              <div style="font-size:0.85rem;font-weight:600;color:var(--muted);margin-bottom:8px;">Batch Outputs (<span id="batchCompleteCount">0</span>)</div>
+              <div id="batchOutputsList" style="display:grid;gap:8px;"></div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -1573,10 +1582,15 @@ function toggleBatchMode() {
   const queueList = document.getElementById('batchQueueList');
   const dropZoneText = document.getElementById('dropZoneText');
   const fileInput = document.getElementById('fileInput');
+  const trimCard = document.getElementById('trimCard');
+  const batchTrimWarning = document.getElementById('batchTrimWarning');
+  const batchOutputsWrap = document.getElementById('batchOutputsWrap');
   
   if (batchMode) {
     btn.classList.add('active');
     queueList.classList.add('visible');
+    trimCard.classList.add('disabled');
+    batchTrimWarning.style.display = 'inline-block';
     dropZoneText.innerHTML = '<strong>Click to add files</strong> or drag & drop multiple local files';
     fileInput.multiple = true;
     
@@ -1602,6 +1616,9 @@ function toggleBatchMode() {
   } else {
     btn.classList.remove('active');
     queueList.classList.remove('visible');
+    trimCard.classList.remove('disabled');
+    batchTrimWarning.style.display = 'none';
+    batchOutputsWrap.classList.add('hidden');
     dropZoneText.innerHTML = '<strong>Click to choose</strong> or drag & drop local file';
     fileInput.multiple = false;
     batchQueue.length = 0;
@@ -1712,6 +1729,7 @@ function clearBatchQueue() {
   batchQueue.length = 0;
   batchCurrent = null;
   updateBatchQueueUI();
+  updateBatchOutputsDisplay();
   addLog('Batch queue cleared.', 'ok');
   syncProcessBtn();
 }
@@ -2588,9 +2606,8 @@ async function processBatchFile(item) {
     vid.onloadedmetadata = () => resolve();
   });
 
-  const trimS = parseFloat(document.getElementById('trimStart').value) || 0;
-  const trimE = parseFloat(document.getElementById('trimEnd').value) || vid.duration;
-  const hasTrim = trimS > 0 || (vid.duration > 0 && trimE < vid.duration - 0.05);
+  // Trim disabled in batch mode — each file processes from start to end
+  const hasTrim = false;
 
   let args = [];
 
@@ -2639,6 +2656,41 @@ async function processBatchFile(item) {
   // Cleanup input and output files from virtual filesystem
   try { await ffmpeg.deleteFile(inName); } catch (_) {}
   try { await ffmpeg.deleteFile(outName); } catch (_) {}
+  
+  // Update batch outputs display in Output section
+  updateBatchOutputsDisplay();
+}
+
+// Display completed batch outputs in the Output section
+function updateBatchOutputsDisplay() {
+  const completed = batchQueue.filter(item => item.status === 'done');
+  const wrap = document.getElementById('batchOutputsWrap');
+  const list = document.getElementById('batchOutputsList');
+  const count = document.getElementById('batchCompleteCount');
+  
+  if (!wrap || !list) return; // Elements don't exist in this mode
+  
+  count.textContent = completed.length;
+  
+  if (completed.length === 0) {
+    wrap.classList.add('hidden');
+    return;
+  }
+  
+  wrap.classList.remove('hidden');
+  list.innerHTML = completed.map((item, idx) => {
+    const batchIdx = batchQueue.indexOf(item);
+    const sizeMB = item.output.size / 1024 / 1024;
+    return `
+      <div style="display:flex;gap:8px;align-items:center;padding:8px;background:var(--surface2);border-radius:6px;">
+        <div style="flex:1;">
+          <div style="font-size:0.85rem;font-weight:500;">${item.file.name}</div>
+          <div style="font-size:0.75rem;color:var(--muted);">→ ${item.outputName} (${sizeMB.toFixed(2)}MB)</div>
+        </div>
+        <button class="btn btn-sm" onclick="downloadBatchFile(${batchIdx})" title="Download"><i class="fas fa-download"></i></button>
+      </div>
+    `;
+  }).join('');
 }
 
 function buildOperationArgs(args, videoEl, inputExt) {
