@@ -55,7 +55,7 @@
 
     /* ── Buttons ── */
     .btn { display: inline-flex; align-items: center; gap: 6px; padding: 9px 18px; border-radius: 7px; border: none; cursor: pointer; font-size: 0.85rem; font-weight: 600; transition: background .15s, opacity .15s; white-space: nowrap; }
-    .btn:disabled { opacity: .35; cursor: not-allowed; }
+    .btn:disabled { opacity: .35; cursor: not-allowed; filter: blur(0.3px); }
     .btn-primary { background: var(--accent); color: #fff; }
     .btn-primary:hover:not(:disabled) { background: var(--accent-h); }
     .btn-success { background: var(--success); color: #fff; }
@@ -357,7 +357,7 @@
       <div class="card" id="trimCard">
         <div class="card-header">
           Trim <span class="tag">applied to all operations</span>
-          <span class="tag" id="batchTrimWarning" style="background:#d97706;display:none;margin-left:8px;">Disabled in batch mode</span>
+          <span class="tag" id="batchTrimWarning" style="background:#d97706;display:none;margin-left:8px;">Disabled (batch mode)</span>
         </div>
         <div class="card-body">
           <p class="hint" style="margin-bottom:8px">Drag the handles to set start and end. Leave untouched to keep the full video.</p>
@@ -1025,7 +1025,7 @@
 
           <!-- Progress -->
           <div class="progress-wrap hidden" id="progWrap">
-            <div class="progress-header"><span>Processing…</span><span id="progPct">0%</span></div>
+            <div class="progress-header"><span id="progLabel">Processing…</span><span id="progPct">0%</span></div>
             <div class="progress-track"><div class="progress-fill" id="progFill"></div></div>
           </div>
 
@@ -1591,6 +1591,7 @@ function toggleBatchMode() {
     queueList.classList.add('visible');
     trimCard.classList.add('disabled');
     batchTrimWarning.style.display = 'inline-block';
+    document.getElementById('addStackBtn').disabled = true;
     dropZoneText.innerHTML = '<strong>Click to add files</strong> or drag & drop multiple local files';
     fileInput.multiple = true;
     
@@ -1619,6 +1620,7 @@ function toggleBatchMode() {
     trimCard.classList.remove('disabled');
     batchTrimWarning.style.display = 'none';
     batchOutputsWrap.classList.add('hidden');
+    document.getElementById('addStackBtn').disabled = false;
     dropZoneText.innerHTML = '<strong>Click to choose</strong> or drag & drop local file';
     fileInput.multiple = false;
     batchQueue.length = 0;
@@ -2527,6 +2529,11 @@ async function runBatch() {
 
   const btn = document.getElementById('processBtn');
   const opTiles = document.querySelectorAll('.op-tile');
+  const progWrap = document.getElementById('progWrap');
+  
+  // Show progress bar
+  progWrap.classList.remove('hidden');
+  document.getElementById('progLabel').textContent = 'Batch Processing…';
   
   // Disable all operation tiles during batch processing
   opTiles.forEach(t => t.style.pointerEvents = 'none');
@@ -2541,6 +2548,11 @@ async function runBatch() {
     for (let i = 0; i < batchQueue.length; i++) {
       const item = batchQueue[i];
       batchCurrent = i;
+      
+      // Update progress bar
+      const progress = ((i) / batchQueue.length) * 100;
+      document.getElementById('progFill').style.width = progress + '%';
+      document.getElementById('progPct').textContent = Math.round(progress) + '%';
       
       // Update status to processing
       item.status = 'processing';
@@ -2561,12 +2573,23 @@ async function runBatch() {
 
       updateBatchQueueUI();
     }
+    
+    // Finalize progress bar
+    document.getElementById('progFill').style.width = '100%';
+    document.getElementById('progPct').textContent = '100%';
 
     const done = batchQueue.filter(i => i.status === 'done').length;
     const failed = batchQueue.filter(i => i.status === 'error').length;
     addLog(`Batch complete: ${done} succeeded, ${failed} failed.`, done === batchQueue.length ? 'ok' : failed === 0 ? 'ok' : 'warn');
 
   } finally {
+    // Hide progress bar
+    setTimeout(() => {
+      progWrap.classList.add('hidden');
+      document.getElementById('progFill').style.width = '0%';
+      document.getElementById('progPct').textContent = '0%';
+    }, 1000);
+    
     // Re-enable operation tiles
     opTiles.forEach(t => t.style.pointerEvents = 'auto');
     opTiles.forEach(t => t.style.opacity = '1');
@@ -3405,6 +3428,9 @@ function setMode(mode) {
     const opId = tile.id.replace('op-', '');
     tile.classList.toggle('disabled', stackMode && !CHAINABLE.has(opId));
   });
+  
+  // Disable Add to Stack button if batch mode is active
+  document.getElementById('addStackBtn').disabled = batchMode;
   updateSizeEstimate();
   refreshStackControls();
   renderStack();
@@ -3419,6 +3445,10 @@ async function runProcessStack() {
     await loadFFmpeg();
     if (!isLoaded()) return;
   }
+  
+  // Show progress bar for stack processing
+  const progWrap = document.getElementById('progWrap');
+  document.getElementById('progLabel').textContent = 'Processing Stack…';
 
   const btn  = document.getElementById('processStackBtn');
   const orig = btn.innerHTML;
@@ -3457,7 +3487,12 @@ async function runProcessStack() {
     try { if (outName) await ffmpeg.deleteFile(outName); } catch (_) {}
     console.error(err);
   } finally {
-    pw.classList.add('hidden');
+    setTimeout(() => {
+      pw.classList.add('hidden');
+      document.getElementById('progFill').style.width = '0%';
+      document.getElementById('progPct').textContent = '0%';
+      document.getElementById('progLabel').textContent = 'Processing…';
+    }, 1000);
     btn.disabled  = false;
     btn.innerHTML = orig;
     releaseWakeLock();
