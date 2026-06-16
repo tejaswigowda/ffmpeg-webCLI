@@ -2356,11 +2356,23 @@ async function runProcess() {
           
           // Create progress UI updater for transcription
           const updateProgress = (prog) => {
-            if (prog.pct !== undefined) {
-              document.getElementById('progPct').textContent = `${prog.pct}%`;
-              const fill = document.getElementById('progFill');
-              fill.style.width = `${prog.pct}%`;
-              document.getElementById('progLabel').textContent = prog.label || 'Transcribing\u2026';
+            let pct, label;
+            // Handle Transformers.js progress format (for model download)
+            if (prog.status === 'progress' || prog.status === 'downloading') {
+              const loaded = prog.loaded || 0;
+              const total = prog.total || 1;
+              pct = total > 0 ? Math.round((loaded / total) * 100) : 0;
+              label = `Loading model\u2026 ${pct}%`;
+            }
+            // Handle our custom progress format (for transcription)
+            else if (prog.pct !== undefined) {
+              pct = prog.pct;
+              label = prog.label || 'Transcribing\u2026';
+            }
+            if (pct !== undefined) {
+              document.getElementById('progPct').textContent = `${pct}%`;
+              document.getElementById('progFill').style.width = `${pct}%`;
+              document.getElementById('progLabel').textContent = label;
             }
           };
           
@@ -2376,6 +2388,7 @@ async function runProcess() {
           // Ensure main progress bar is at 100%
           document.getElementById('progPct').textContent = '100%';
           document.getElementById('progFill').style.width = '100%';
+          document.getElementById('progLabel').textContent = 'Transcription complete';
           
           addLog(`Transcription complete: ${segments.length} segments`, 'ok');
           
