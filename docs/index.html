@@ -2518,7 +2518,7 @@ async function runProcess() {
           // Start reloading ffmpeg in the background; disable Confirm & Embed until ready
           const confirmBtn = document.getElementById('confirmEmbedBtn');
           confirmBtn.disabled = true;
-          confirmBtn.textContent = '\u23f3 Loading ffmpeg\u2026';
+          confirmBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading ffmpeg\u2026';
           
           addLog('Preparing ffmpeg.wasm for subtitle embedding\u2026', 'ok');
           (async () => {
@@ -4279,8 +4279,9 @@ async function buildCaptionBurnArgs(cues, inName, fontSizeChoice) {
   const canvasW = vidW || 1920;
   const canvasH = vidH || 1080;
   // Font size scales with video height; the user choice nudges it up or down.
-  const fontScale = { small: 0.72, medium: 1.0, large: 1.35 }[fontSizeChoice] || 1.0;
+  const fontScale = { small: 0.7, medium: 1.0, large: 1.5 }[fontSizeChoice] || 1.0;
   const fontSize = Math.max(14, Math.round(canvasH * 0.045 * fontScale));
+  addLog(`Caption font size: ${fontSizeChoice || 'medium'} (${fontSize}px @ ${canvasW}x${canvasH})`, 'ok');
   const lineHeight = Math.round(fontSize * 1.3);
   const padX = Math.round(fontSize * 0.7);
   const padY = Math.round(fontSize * 0.4);
@@ -4366,15 +4367,15 @@ async function buildCaptionBurnArgs(cues, inName, fontSizeChoice) {
     if (i < cues.length - 1) filterComplex += ';';
   }
 
-  // NOTE: do NOT use `-loop 1` here. A looped image is an infinite input, which
-  // keeps ffmpeg running long after the video is encoded. A single still frame
-  // EOFs immediately and overlay's default eof_action=repeat holds it for the
-  // whole video, so every input is finite and ffmpeg exits when the video ends.
+  // Each caption is a looped (`-loop 1`) image so it stays available for the full
+  // duration of its `enable` window. On its own that's an infinite input and ffmpeg
+  // would never stop after the video ends — `-shortest` bounds the output to the
+  // finite video/audio, so captions render for the whole clip AND ffmpeg exits.
   const args = ['-i', inName];
-  for (let i = 0; i < cues.length; i++) args.push('-i', `caption_${i}.png`);
+  for (let i = 0; i < cues.length; i++) args.push('-loop', '1', '-i', `caption_${i}.png`);
   args.push('-filter_complex', filterComplex);
   args.push('-map', `[v${cues.length - 1}]`, '-map', '0:a?');
-  args.push('-c:a', 'copy', '-c:v', 'libx264', '-preset', 'fast', '-crf', '23');
+  args.push('-c:a', 'copy', '-c:v', 'libx264', '-preset', 'fast', '-crf', '23', '-shortest');
   return args;
 }
 

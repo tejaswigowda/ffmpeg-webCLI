@@ -80,7 +80,7 @@ ffmpeg -i input.mp4 -vf "crop=1280:720:0:0,eq=brightness=0:contrast=1:saturation
 
 ### ▶ Batch Processing
 Process multiple video files with the same operation in a single session. Click the **Batch** toggle in the Input Video card to enable batch mode, then drop or select multiple files. Each file is queued with a status indicator:
-- ⏳ **Pending** : queued, waiting to process
+- ⧖ **Pending** : queued, waiting to process
 - ▶ **Processing** : currently encoding
 - ✓ **Done** : completed successfully
 - ✗ **Error** : encountered an issue
