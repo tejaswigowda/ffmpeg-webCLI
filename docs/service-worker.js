@@ -1,22 +1,47 @@
 /**
  * Service Worker for FFmpeg Video Editor PWA
- * 
+ *
  * This service worker provides:
  * - Offline-first caching strategy
  * - Network-first for HTML, JSON, JS (with fallback to cache)
  * - Cache-first for images, fonts, CSS, WASM libraries
  * - CDN resources caching (ffmpeg library, utilities, icons)
+ *
+ * ── Refactor note ──
+ * The precache list now includes styles.css and every js/*.js module so
+ * the refactored app (which loads ES modules on demand) still works
+ * fully offline after first visit.
  */
 
-const CACHE_NAME = 'ffmpeg-editor-v3';
-const RUNTIME_CACHE = 'ffmpeg-editor-runtime-v3';
-const CDN_CACHE = 'ffmpeg-editor-cdn-v3';
+const CACHE_NAME = 'ffmpeg-editor-v4';
+const RUNTIME_CACHE = 'ffmpeg-editor-runtime-v4';
+const CDN_CACHE = 'ffmpeg-editor-cdn-v4';
 
 const STATIC_ASSETS = [
   '/',
   '/index.html',
+  '/styles.css',
+  '/js/theme.js',
+  '/js/state.js',
+  '/js/helpers.js',
+  '/js/engine.js',
+  '/js/ui.js',
+  '/js/trim.js',
+  '/js/files.js',
+  '/js/crop.js',
+  '/js/raw.js',
+  '/js/operations.js',
+  '/js/batch.js',
+  '/js/stack.js',
+  '/js/subtitles.js',
+  '/js/autocaption.js',
+  '/js/process.js',
+  '/js/pwa.js',
+  '/js/main.js',
   '/worker.js',
   '/coi-serviceworker.js',
+  '/transcriber.js',
+  '/three-bvh-csg-shim.js',
   '/manifest.json',
 ];
 
@@ -27,17 +52,20 @@ const CDN_RESOURCES = [
   'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/esm/ffmpeg-core.wasm',
   'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/esm/ffmpeg-core.worker.js',
   'https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.2/dist/esm/index.js',
-  
+
   // Font Awesome icons
   'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css',
   'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/webfonts/fa-solid-900.woff2',
   'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/webfonts/fa-solid-900.ttf',
+
+  // JSZip (for "Download all as ZIP" in batch mode)
+  'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
 ];
 
 // Install event: cache static assets
 self.addEventListener('install', (event) => {
   console.log('[SW] Installing service worker');
-  
+
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then((cache) => {
@@ -57,13 +85,13 @@ self.addEventListener('install', (event) => {
 // Activate event: clean up old caches
 self.addEventListener('activate', (event) => {
   console.log('[SW] Activating service worker');
-  
+
   event.waitUntil(
     caches.keys().then((cacheNames) => {
       return Promise.all(
         cacheNames.map((cacheName) => {
-          if (cacheName !== CACHE_NAME && 
-              cacheName !== RUNTIME_CACHE && 
+          if (cacheName !== CACHE_NAME &&
+              cacheName !== RUNTIME_CACHE &&
               cacheName !== CDN_CACHE) {
             console.log('[SW] Deleting old cache:', cacheName);
             return caches.delete(cacheName);
@@ -100,12 +128,13 @@ self.addEventListener('fetch', (event) => {
         .then((response) => {
           // Only cache successful responses
           if (response && response.status === 200) {
-            const cache = request.url.includes('.js') || 
+            const cache = request.url.includes('.js') ||
                          request.url.includes('.json') ||
-                         request.url.includes('.html')
+                         request.url.includes('.html') ||
+                         request.url.includes('.css')
               ? RUNTIME_CACHE
               : CACHE_NAME;
-            
+
             const responseClone = response.clone();
             caches.open(cache).then((c) => {
               try {
@@ -125,7 +154,7 @@ self.addEventListener('fetch', (event) => {
                 console.log('[SW] Served from cache:', request.url);
                 return response;
               }
-              
+
               // For JS files, return empty module to prevent import errors offline
               if (request.url.includes('.js')) {
                 return new Response('export default {};', {
@@ -133,12 +162,12 @@ self.addEventListener('fetch', (event) => {
                   headers: { 'Content-Type': 'application/javascript' },
                 });
               }
-              
+
               // Return offline page for navigation requests
               if (request.destination === 'document') {
                 return caches.match('/index.html');
               }
-              
+
               return new Response('Offline - resource not available', {
                 status: 503,
                 statusText: 'Service Unavailable',
@@ -151,7 +180,7 @@ self.addEventListener('fetch', (event) => {
   }
 
   // Handle CDN resources (cache-first, fallback to network)
-  if (url.origin.includes('cdn.jsdelivr.net') || 
+  if (url.origin.includes('cdn.jsdelivr.net') ||
       url.origin.includes('cdnjs.cloudflare.com')) {
     event.respondWith(
       caches.match(request)
@@ -160,7 +189,7 @@ self.addEventListener('fetch', (event) => {
             console.log('[SW] Served from CDN cache:', request.url);
             return response;
           }
-          
+
           return fetch(request)
             .then((response) => {
               // Only cache successful responses
@@ -218,7 +247,7 @@ self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'SKIP_WAITING') {
     self.skipWaiting();
   }
-  
+
   if (event.data && event.data.type === 'CLEAR_CACHES') {
     caches.keys().then((cacheNames) => {
       return Promise.all(
