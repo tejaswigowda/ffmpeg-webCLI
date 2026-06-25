@@ -2821,18 +2821,24 @@ async function runProcess() {
     outExt = ext;
     const outName = 'output.' + ext;
     args.push(outName);
+    applyWasmVp9Safety(args, document.getElementById('inputVideo').videoWidth || 0, addLog);
 
     addLog('ffmpeg ' + args.join(' '), 'ok');
-    const exitCode = await ffmpeg.exec(args);
+    const exitCode = await execWithWebmFallback(args, document.getElementById('inputVideo').videoWidth || 0);
     if (exitCode !== 0) throw new Error(`ffmpeg exited with code ${exitCode} — check your arguments and try again.`);
     addLog('Done!', 'ok');
 
-    const data = await ffmpeg.readFile(outName);
-    await renderOutput(data, ext);
+    // The fallback chain may change the real output (e.g. WebM → MP4).
+    const finalOut = args[args.length - 1];
+    const finalExt = String(finalOut).split('.').pop().toLowerCase();
+    outExt = finalExt;
+
+    const data = await ffmpeg.readFile(finalOut);
+    await renderOutput(data, finalExt);
 
     // Clean up virtual FS
     await ffmpeg.deleteFile(inName).catch(() => {});
-    await ffmpeg.deleteFile(outName).catch(() => {});
+    await ffmpeg.deleteFile(finalOut).catch(() => {});
 
   } catch (err) {
     const errMsg = (err instanceof Error ? err.message : String(err)) || 'unknown error';
@@ -2997,24 +3003,31 @@ async function processBatchFile(item) {
 
   // Add output filename
   args.push(outName);
+  applyWasmVp9Safety(args, vid.videoWidth || 0, addLog);
 
   // Execute ffmpeg
   addLog(`  Processing ${file.name}…`, 'log');
   try {
-    const res = await ffmpeg.exec(args);
+    const res = await execWithWebmFallback(args, vid.videoWidth || 0);
     if (res !== 0) throw new Error(`ffmpeg exited with code ${res}`);
   } catch (err) {
     throw new Error(`FFmpeg error: ${err.message}`);
   }
 
-  
+  // The fallback chain may change the real output (e.g. WebM → MP4).
+  const finalOut = args[args.length - 1];
+  const finalExt = String(finalOut).split('.').pop().toLowerCase();
+  if (finalExt !== outExt && item.outputName) {
+    item.outputName = item.outputName.replace(/\.[^.]+$/, '.' + finalExt);
+  }
+
   // Read output
-  const data = await ffmpeg.readFile(outName);
-  item.output = new Blob([data.buffer], { type: 'video/' + outExt });
+  const data = await ffmpeg.readFile(finalOut);
+  item.output = new Blob([data.buffer], { type: 'video/' + finalExt });
 
   // Cleanup input and output files from virtual filesystem
   try { await ffmpeg.deleteFile(inName); } catch (_) {}
-  try { await ffmpeg.deleteFile(outName); } catch (_) {}
+  try { await ffmpeg.deleteFile(finalOut); } catch (_) {}
   
   // Update batch outputs display in Output section
   updateBatchOutputsDisplay();
@@ -3754,6 +3767,383 @@ function getFormatCodecArgs(fmt) {
   }
 }
 
+// ffmpeg.wasm runs in a constrained WASM memory space; VP9 can OOM on large inputs.
+// This mutates args in-place to add safer VP9 settings before execution.
+function applyWasmVp9Safety(args, videoWidth = 0, addLogFn = null) {
+  if (!Array.isArray(args) || !args.length) return args;
+  const hasVp9 = args.some((v, i) => v === '-c:v' && args[i + 1] === 'libvpx-vp9');
+  if (!hasVp9) return args;
+
+  const outName = args.pop();
+  const hasFlag = (flag) => args.includes(flag);
+  const pushPairIfMissing = (flag, value) => {
+    if (!hasFlag(flag)) args.push(flag, value);
+  };
+
+  // Safer encoder settings for browser/WASM memory limits.
+  pushPairIfMissing('-deadline', 'realtime');
+  pushPairIfMissing('-cpu-used', '6');
+  pushPairIfMissing('-row-mt', '1');
+  pushPairIfMissing('-tile-columns', '1');
+  pushPairIfMissing('-frame-parallel', '0');
+  pushPairIfMissing('-lag-in-frames', '0');
+
+  const hasOpus = args.some((v, i) => v === '-c:a' && args[i + 1] === 'libopus');
+  if (hasOpus && !hasFlag('-an')) {
+    pushPairIfMissing('-b:a', '128k');
+    pushPairIfMissing('-ac', '2');
+  }
+
+  // Do not inject scaling here; WebM fallback builder handles final scale policy.
+
+  args.push(outName);
+  return args;
+}
+
+function buildWebmVp8FallbackArgs(args, videoWidth = 0) {
+  if (!Array.isArray(args) || args.length < 2) return null;
+  const outName = args[args.length - 1];
+  if (!/\.webm$/i.test(String(outName))) return null;
+  const hasVp9 = args.some((v, i) => v === '-c:v' && args[i + 1] === 'libvpx-vp9');
+  if (!hasVp9) return null;
+
+  const body = args.slice(0, -1);
+  const rebuilt = [];
+  let vfValue = '';
+  let hasFilterComplex = false;
+  let hasNoAudio = false;
+
+  const dropPairFlags = new Set([
+    '-b:v', '-crf', '-deadline', '-cpu-used', '-row-mt', '-tile-columns',
+    '-frame-parallel', '-lag-in-frames', '-b:a', '-ac', '-threads', '-c:a'
+  ]);
+
+  for (let i = 0; i < body.length; i++) {
+    const t = body[i];
+    const n = body[i + 1];
+
+    if (t === '-an') {
+      hasNoAudio = true;
+      rebuilt.push(t);
+      continue;
+    }
+
+    if (t === '-filter_complex') {
+      hasFilterComplex = true;
+      rebuilt.push(t, n);
+      i++;
+      continue;
+    }
+
+    if (t === '-vf') {
+      vfValue = n || '';
+      i++;
+      continue;
+    }
+
+    if (t === '-c:v' && n === 'libvpx-vp9') {
+      rebuilt.push('-c:v', 'libvpx');
+      i++;
+      continue;
+    }
+
+    if (dropPairFlags.has(t)) {
+      i++;
+      continue;
+    }
+
+    rebuilt.push(t);
+  }
+
+  if (!hasFilterComplex) {
+    const fallbackScale = (videoWidth > 640) ? 'scale=640:-2:flags=fast_bilinear' : '';
+    let mergedVf = vfValue;
+    if (fallbackScale) {
+      mergedVf = mergedVf ? `${mergedVf},${fallbackScale}` : fallbackScale;
+    }
+    if (mergedVf) rebuilt.push('-vf', mergedVf);
+  }
+
+  rebuilt.push('-deadline', 'realtime', '-cpu-used', '8', '-threads', '1', '-crf', '40', '-b:v', '450k');
+
+  if (!hasNoAudio) {
+    rebuilt.push('-c:a', 'libopus', '-b:a', '96k', '-ac', '2');
+  }
+
+  rebuilt.push(outName);
+  return rebuilt;
+}
+
+function buildWebmEmergencyNoAudioArgs(args, videoWidth = 0) {
+  if (!Array.isArray(args) || args.length < 2) return null;
+  const outName = args[args.length - 1];
+  if (!/\.webm$/i.test(String(outName))) return null;
+
+  const body = args.slice(0, -1);
+  const rebuilt = [];
+  let vfValue = '';
+  let hasFilterComplex = false;
+
+  const dropPairFlags = new Set([
+    '-c:v', '-c:a', '-b:v', '-crf', '-deadline', '-cpu-used', '-row-mt', '-tile-columns',
+    '-frame-parallel', '-lag-in-frames', '-b:a', '-ac', '-threads', '-g', '-auto-alt-ref'
+  ]);
+
+  for (let i = 0; i < body.length; i++) {
+    const t = body[i];
+    const n = body[i + 1];
+
+    if (t === '-filter_complex') {
+      hasFilterComplex = true;
+      rebuilt.push(t, n);
+      i++;
+      continue;
+    }
+
+    if (t === '-vf') {
+      vfValue = n || '';
+      i++;
+      continue;
+    }
+
+    if (t === '-an') continue;
+    if (dropPairFlags.has(t)) { i++; continue; }
+    rebuilt.push(t);
+  }
+
+  if (!hasFilterComplex) {
+    const emergencyScale = (videoWidth > 426) ? 'scale=426:-2:flags=fast_bilinear' : '';
+    let mergedVf = vfValue;
+    if (emergencyScale) {
+      mergedVf = mergedVf ? `${mergedVf},${emergencyScale}` : emergencyScale;
+    }
+    if (mergedVf) rebuilt.push('-vf', mergedVf);
+  }
+
+  rebuilt.push('-an');
+  rebuilt.push('-c:v', 'libvpx', '-deadline', 'realtime', '-cpu-used', '8', '-threads', '1', '-crf', '45', '-b:v', '300k', '-g', '120', '-auto-alt-ref', '0', '-lag-in-frames', '0');
+  rebuilt.push(outName);
+  return rebuilt;
+}
+
+// Last-resort rescue: this ffmpeg.wasm build's libvpx (VP8/VP9) can crash with
+// "memory access out of bounds" regardless of resolution. H.264/MP4 is stable,
+// so when all WebM attempts fail we transcode to MP4 and change the output name.
+function buildMp4RescueArgs(args) {
+  if (!Array.isArray(args) || args.length < 2) return null;
+  const outName = args[args.length - 1];
+  if (!/\.webm$/i.test(String(outName))) return null;
+
+  const mp4OutName = String(outName).replace(/\.webm$/i, '.mp4');
+  const body = args.slice(0, -1);
+  const rebuilt = [];
+  let vfValue = '';
+  let hasFilterComplex = false;
+  let hasNoAudio = false;
+
+  const dropPairFlags = new Set([
+    '-c:v', '-c:a', '-b:v', '-crf', '-deadline', '-cpu-used', '-row-mt', '-tile-columns',
+    '-frame-parallel', '-lag-in-frames', '-b:a', '-ac', '-threads', '-g', '-auto-alt-ref',
+    '-q:v', '-qmin', '-qmax'
+  ]);
+
+  for (let i = 0; i < body.length; i++) {
+    const t = body[i];
+    const n = body[i + 1];
+
+    if (t === '-an') { hasNoAudio = true; rebuilt.push(t); continue; }
+
+    if (t === '-filter_complex') {
+      hasFilterComplex = true;
+      rebuilt.push(t, n);
+      i++;
+      continue;
+    }
+
+    if (t === '-vf') { vfValue = n || ''; i++; continue; }
+    if (dropPairFlags.has(t)) { i++; continue; }
+    rebuilt.push(t);
+  }
+
+  if (!hasFilterComplex && vfValue) {
+    rebuilt.push('-vf', vfValue);
+  }
+
+  rebuilt.push('-c:v', 'libx264', '-preset', 'veryfast', '-crf', '26', '-pix_fmt', 'yuv420p');
+  if (!hasNoAudio) {
+    rebuilt.push('-c:a', 'aac', '-b:a', '128k', '-ac', '2');
+  }
+  rebuilt.push('-movflags', '+faststart');
+  rebuilt.push(mp4OutName);
+  return rebuilt;
+}
+
+// Some ffmpeg.wasm core builds crash inside libvpx (VP8/VP9) at frame 1 regardless
+// of resolution/bitrate. When WebM cannot be produced, fall back to a reliable
+// MP4 (H.264/AAC) so the user still gets a usable output file.
+function buildMp4FromWebmArgsSafe(args) {
+  if (!Array.isArray(args) || args.length < 2) return null;
+  const outName = args[args.length - 1];
+  if (!/\.webm$/i.test(String(outName))) return null;
+  const mp4Out = String(outName).replace(/\.webm$/i, '.mp4');
+
+  const body = args.slice(0, -1);
+  const rebuilt = [];
+  let hasNoAudio = false;
+  let hasPixFmt = false;
+
+  const keepPairFlags = new Set([
+    '-i', '-ss', '-t', '-vf', '-af', '-filter_complex', '-map', '-map_metadata',
+    '-stream_loop', '-r', '-pix_fmt'
+  ]);
+  const dropPairFlags = new Set([
+    '-c:v', '-c:a', '-b:v', '-b:a', '-crf', '-deadline', '-cpu-used', '-row-mt',
+    '-tile-columns', '-frame-parallel', '-lag-in-frames', '-ac', '-threads',
+    '-g', '-auto-alt-ref', '-q:v'
+  ]);
+
+  for (let i = 0; i < body.length; i++) {
+    const t = body[i];
+    if (t === '-an') { hasNoAudio = true; rebuilt.push(t); continue; }
+    if (t === '-f' && /webm/i.test(String(body[i + 1]))) { i++; continue; }
+    if (t === '-pix_fmt') hasPixFmt = true;
+    if (keepPairFlags.has(t)) { rebuilt.push(t, body[i + 1]); i++; continue; }
+    if (dropPairFlags.has(t)) { i++; continue; }
+    rebuilt.push(t);
+  }
+
+  rebuilt.push('-c:v', 'libx264', '-preset', 'veryfast', '-crf', '26');
+  if (!hasPixFmt) rebuilt.push('-pix_fmt', 'yuv420p');
+  if (!hasNoAudio) rebuilt.push('-c:a', 'aac', '-b:a', '128k');
+  rebuilt.push(mp4Out);
+  return rebuilt;
+}
+
+async function execWithWebmFallback(args, videoWidth = 0) {
+  const originalArgs = Array.isArray(args) ? [...args] : args;
+
+  // libvpx (VP8/VP9) WebM encoding is broken in this ffmpeg.wasm core build
+  // (crashes at frame 1), and chaining several failed exec() calls exhausts
+  // wasm memory ("memory access out of bounds"). For WebM, skip the doomed
+  // libvpx attempts and run a single fresh-memory MP4 (H.264/AAC) pass.
+  {
+    const reqOut = Array.isArray(args) ? args[args.length - 1] : '';
+    if (/\.webm$/i.test(String(reqOut))) {
+      const mp4Args = buildMp4FromWebmArgsSafe(originalArgs);
+      if (mp4Args) {
+        addLog('WebM (libvpx) is unsupported in this ffmpeg.wasm build; producing MP4 (H.264) instead.', 'warn');
+        addLog('ffmpeg ' + mp4Args.join(' '), 'warn');
+        const code = await ffmpeg.exec(mp4Args);
+        if (code === 0) {
+          try {
+            const mp4Name = mp4Args[mp4Args.length - 1];
+            if (reqOut && reqOut !== mp4Name) {
+              const mirrored = await ffmpeg.readFile(mp4Name);
+              await ffmpeg.writeFile(reqOut, mirrored);
+            }
+          } catch (_) {}
+          args.length = 0;
+          args.push(...mp4Args);
+        }
+        return code;
+      }
+    }
+  }
+
+  const proactiveVp8Args = buildWebmVp8FallbackArgs(args, videoWidth);
+  const usedProactiveVp8 = !!proactiveVp8Args;
+  if (usedProactiveVp8) {
+    addLog('WebM in ffmpeg.wasm: using VP8 low-memory path for stability.', 'warn');
+    args.length = 0;
+    args.push(...proactiveVp8Args);
+    addLog('ffmpeg ' + args.join(' '), 'warn');
+  }
+
+  let lastCode = -1;
+  let lastErr = null;
+
+  try {
+    lastCode = await ffmpeg.exec(args);
+    if (lastCode === 0) return 0;
+  } catch (err) {
+    lastErr = err;
+  }
+
+  // If we did not already rewrite to VP8 before the first run, try VP8 once.
+  let baseForEmergency = args;
+  if (!usedProactiveVp8) {
+    const fallbackArgs = buildWebmVp8FallbackArgs(originalArgs, videoWidth);
+    if (fallbackArgs) {
+      addLog('VP9 encode failed in ffmpeg.wasm; retrying with WebM VP8 low-memory fallback…', 'warn');
+      addLog('ffmpeg ' + fallbackArgs.join(' '), 'warn');
+      try {
+        const fallbackCode = await ffmpeg.exec(fallbackArgs);
+        if (fallbackCode === 0) {
+          args.length = 0;
+          args.push(...fallbackArgs);
+          return 0;
+        }
+        lastCode = fallbackCode;
+      } catch (err) {
+        lastErr = err;
+      }
+      baseForEmergency = fallbackArgs;
+    }
+  }
+
+  const emergencyArgs = buildWebmEmergencyNoAudioArgs(baseForEmergency, videoWidth);
+  if (!emergencyArgs) {
+    if (lastErr) throw lastErr;
+    return lastCode;
+  }
+
+  addLog('WebM encode still unstable; retrying emergency mode (VP8, no-audio, 426w)…', 'warn');
+  addLog('ffmpeg ' + emergencyArgs.join(' '), 'warn');
+  try {
+    const emergencyCode = await ffmpeg.exec(emergencyArgs);
+    if (emergencyCode === 0) {
+      args.length = 0;
+      args.push(...emergencyArgs);
+      return 0;
+    }
+    lastCode = emergencyCode;
+  } catch (err) {
+    lastErr = err;
+  }
+
+  // Final resort: this ffmpeg.wasm build cannot encode WebM (libvpx crashes at
+  // frame 1). Produce a reliable MP4 (H.264/AAC) so the user still gets output.
+  const mp4Args = buildMp4FromWebmArgsSafe(originalArgs);
+  if (mp4Args) {
+    addLog('WebM (libvpx) is unsupported in this ffmpeg.wasm build; producing MP4 (H.264) instead.', 'warn');
+    addLog('ffmpeg ' + mp4Args.join(' '), 'warn');
+    try {
+      const mp4Code = await ffmpeg.exec(mp4Args);
+      if (mp4Code === 0) {
+        // Mirror the MP4 bytes onto the originally-requested .webm path so any
+        // caller that still reads the original output name gets valid data.
+        try {
+          const reqName = originalArgs[originalArgs.length - 1];
+          const mp4Name = mp4Args[mp4Args.length - 1];
+          if (reqName && reqName !== mp4Name) {
+            const mirrored = await ffmpeg.readFile(mp4Name);
+            await ffmpeg.writeFile(reqName, mirrored);
+          }
+        } catch (_) {}
+        args.length = 0;
+        args.push(...mp4Args);
+        return 0;
+      }
+      lastCode = mp4Code;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+
+  if (lastErr) throw lastErr;
+  return lastCode;
+}
+
 // Build the full args array (for exec) AND a readable preview string from the
 // current stack + trim + output format. Single source of truth for both.
 function composeStackCommand() {
@@ -3942,17 +4332,23 @@ async function runProcessStack() {
 
     const { args, outFmt } = composeStackCommand();
     outName = 'output.' + outFmt;
+    applyWasmVp9Safety(args, document.getElementById('inputVideo').videoWidth || 0, addLog);
 
     addLog('ffmpeg ' + args.join(' '), 'ok');
-    const exitCode = await ffmpeg.exec(args);
+    const exitCode = await execWithWebmFallback(args, document.getElementById('inputVideo').videoWidth || 0);
     if (exitCode !== 0) throw new Error(`ffmpeg exited with code ${exitCode} — check the composed command.`);
     addLog('Done!', 'ok');
 
-    const data = await ffmpeg.readFile(outName);
-    await renderOutput(data, outFmt);
+    // The fallback chain may change the real output (e.g. WebM → MP4).
+    const finalOut = args[args.length - 1];
+    const finalExt = String(finalOut).split('.').pop().toLowerCase();
+    outName = finalOut;
+
+    const data = await ffmpeg.readFile(finalOut);
+    await renderOutput(data, finalExt);
 
     await ffmpeg.deleteFile(inName).catch(() => {});
-    await ffmpeg.deleteFile(outName).catch(() => {});
+    await ffmpeg.deleteFile(finalOut).catch(() => {});
   } catch (err) {
     const errMsg = (err instanceof Error ? err.message : String(err)) || 'unknown error';
     addLog('Error: ' + errMsg, 'err');
@@ -4083,16 +4479,24 @@ async function processBatchStackFile(item) {
   await new Promise(resolve => { vid.onloadedmetadata = () => resolve(); });
 
   const { args } = composeStackArgsFor(inName, outName, vid.videoWidth, vid.videoHeight, vid.duration);
+  applyWasmVp9Safety(args, vid.videoWidth || 0, addLog);
 
   addLog('  ffmpeg ' + args.join(' '), 'log');
-  const res = await ffmpeg.exec(args);
+  const res = await execWithWebmFallback(args, vid.videoWidth || 0);
   if (res !== 0) throw new Error(`ffmpeg exited with code ${res}`);
 
-  const data = await ffmpeg.readFile(outName);
-  item.output = new Blob([data.buffer], { type: mime(outExt) });
+  // The fallback chain may change the real output (e.g. WebM → MP4).
+  const finalOut = args[args.length - 1];
+  const finalExt = String(finalOut).split('.').pop().toLowerCase();
+  if (finalExt !== outExt && item.outputName) {
+    item.outputName = item.outputName.replace(/\.[^.]+$/, '.' + finalExt);
+  }
+
+  const data = await ffmpeg.readFile(finalOut);
+  item.output = new Blob([data.buffer], { type: mime(finalExt) });
 
   try { await ffmpeg.deleteFile(inName); } catch (_) {}
-  try { await ffmpeg.deleteFile(outName); } catch (_) {}
+  try { await ffmpeg.deleteFile(finalOut); } catch (_) {}
 
   updateBatchOutputsDisplay();
 }
