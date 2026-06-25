@@ -1201,6 +1201,7 @@ function blobToDataURL(blob) {
 const ffmpeg = new FFmpeg();
 let inputFile = null;
 let inputExt  = '';
+let currentObjectURL = null;  // object URL backing the input <video> preview
 let vidDur    = 0;
 let currentOp    = 'convert';
 let outBlob      = null;
@@ -1596,14 +1597,14 @@ async function handleFile(file) {
   document.getElementById('quickDownloadWrap').classList.add('hidden');
 
   const vid = document.getElementById('inputVideo');
-  // Use a data: URL instead of blob: URL — avoids ERR_REQUEST_RANGE_NOT_SATISFIABLE.
-  // Skip inline preview for files > 200 MB to avoid excessive memory use.
-  if (file.size <= 200 * 1024 * 1024) {
-    vid.src = await blobToDataURL(file);
-  } else {
-    vid.src = '';
-    addLog(`Preview skipped for large file (${fmtBytes(file.size)}); processing will still work.`, 'ok');
-  }
+  // Use an object URL (blob:) for the preview. Unlike a data: URL it does not
+  // base64-inflate the file (~33% larger) and never copies the whole file into
+  // memory — it is just a lightweight reference. This lets very large files
+  // (200 MB+) load and report metadata (duration/dimensions), and it supports
+  // seeking via HTTP range requests.
+  if (currentObjectURL) { URL.revokeObjectURL(currentObjectURL); currentObjectURL = null; }
+  currentObjectURL = URL.createObjectURL(file);
+  vid.src = currentObjectURL;
   vid.onloadedmetadata = () => {
     vidDur = vid.duration;
     const s = document.getElementById('trimStart');
@@ -1634,6 +1635,7 @@ async function handleFile(file) {
 function clearInput() {
   if (batchMode) return;  // Don't clear in batch mode
   inputFile = null;
+  if (currentObjectURL) { URL.revokeObjectURL(currentObjectURL); currentObjectURL = null; }
   document.getElementById('inputVideo').src = '';
   document.getElementById('inputWrap').classList.add('hidden');
   document.getElementById('dropZone').classList.remove('hidden');
@@ -1734,21 +1736,19 @@ function handleBatchFiles(files) {
 function loadFirstBatchFileForStack() {
   if (inputFile || !batchMode || batchQueue.length === 0) return;
   const firstBatchFile = batchQueue[0].file;
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    inputFile = firstBatchFile;
-    inputExt = firstBatchFile.name.split('.').pop().toLowerCase();
-    const video = document.getElementById('inputVideo');
-    video.src = e.target.result;
-    video.onloadedmetadata = () => {
-      document.getElementById('inputWrap').classList.remove('hidden');
-      document.getElementById('dropZone').classList.add('hidden');
-      addLog(`Loaded first batch file for stack building: "${firstBatchFile.name}"`, 'ok');
-      refreshStackControls();
-      renderStack();
-    };
+  inputFile = firstBatchFile;
+  inputExt = firstBatchFile.name.split('.').pop().toLowerCase();
+  const video = document.getElementById('inputVideo');
+  if (currentObjectURL) { URL.revokeObjectURL(currentObjectURL); currentObjectURL = null; }
+  currentObjectURL = URL.createObjectURL(firstBatchFile);
+  video.src = currentObjectURL;
+  video.onloadedmetadata = () => {
+    document.getElementById('inputWrap').classList.remove('hidden');
+    document.getElementById('dropZone').classList.add('hidden');
+    addLog(`Loaded first batch file for stack building: "${firstBatchFile.name}"`, 'ok');
+    refreshStackControls();
+    renderStack();
   };
-  reader.readAsDataURL(firstBatchFile);
 }
 
 function updateBatchTileStates() {
@@ -4022,31 +4022,55 @@ function buildMp4FromWebmArgsSafe(args) {
 async function execWithWebmFallback(args, videoWidth = 0) {
   const originalArgs = Array.isArray(args) ? [...args] : args;
 
-  // libvpx (VP8/VP9) WebM encoding is broken in this ffmpeg.wasm core build
-  // (crashes at frame 1), and chaining several failed exec() calls exhausts
-  // wasm memory ("memory access out of bounds"). For WebM, skip the doomed
-  // libvpx attempts and run a single fresh-memory MP4 (H.264/AAC) pass.
+  // Honor the requested WebM format: attempt the real encode first. If WebM
+  // encoding fails in this ffmpeg.wasm core (some builds crash in libvpx), reset
+  // the wasm memory and produce a reliable MP4 (H.264/AAC) instead.
   {
     const reqOut = Array.isArray(args) ? args[args.length - 1] : '';
     if (/\.webm$/i.test(String(reqOut))) {
-      const mp4Args = buildMp4FromWebmArgsSafe(originalArgs);
-      if (mp4Args) {
-        addLog('WebM (libvpx) is unsupported in this ffmpeg.wasm build; producing MP4 (H.264) instead.', 'warn');
-        addLog('ffmpeg ' + mp4Args.join(' '), 'warn');
-        const code = await ffmpeg.exec(mp4Args);
-        if (code === 0) {
-          try {
-            const mp4Name = mp4Args[mp4Args.length - 1];
-            if (reqOut && reqOut !== mp4Name) {
-              const mirrored = await ffmpeg.readFile(mp4Name);
-              await ffmpeg.writeFile(reqOut, mirrored);
-            }
-          } catch (_) {}
-          args.length = 0;
-          args.push(...mp4Args);
-        }
-        return code;
+      // Capture the input bytes up front so we can restore them if we have to
+      // terminate/reload ffmpeg.wasm to recover memory for the MP4 fallback.
+      let inName = null, inBytes = null;
+      try {
+        const iIdx = originalArgs.indexOf('-i');
+        inName = iIdx >= 0 ? originalArgs[iIdx + 1] : null;
+        if (inName) inBytes = await ffmpeg.readFile(inName);
+      } catch (_) {}
+
+      // 1) Try the WebM encode the user actually requested.
+      let webmCode = -1;
+      try {
+        webmCode = await ffmpeg.exec(args);
+      } catch (_) {
+        webmCode = -1;
       }
+      if (webmCode === 0) return 0; // real WebM produced
+
+      // 2) WebM failed — reset wasm memory and fall back to MP4.
+      const mp4Args = buildMp4FromWebmArgsSafe(originalArgs);
+      if (!mp4Args) return webmCode;
+
+      addLog('WebM encoding is unsupported in this ffmpeg.wasm build; producing MP4 (H.264) instead.', 'warn');
+      try {
+        await ffmpeg.terminate();
+        await loadFFmpeg();
+        if (inName && inBytes) await ffmpeg.writeFile(inName, inBytes);
+      } catch (_) {}
+
+      addLog('ffmpeg ' + mp4Args.join(' '), 'warn');
+      const code = await ffmpeg.exec(mp4Args);
+      if (code === 0) {
+        try {
+          const mp4Name = mp4Args[mp4Args.length - 1];
+          if (reqOut && reqOut !== mp4Name) {
+            const mirrored = await ffmpeg.readFile(mp4Name);
+            await ffmpeg.writeFile(reqOut, mirrored);
+          }
+        } catch (_) {}
+        args.length = 0;
+        args.push(...mp4Args);
+      }
+      return code;
     }
   }
 
