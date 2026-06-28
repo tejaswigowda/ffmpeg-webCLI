@@ -48,7 +48,7 @@ A browser-based video editor powered by [ffmpeg.wasm](https://github.com/ffmpegw
 | Metadata2go | Strip metadata |
 | Subtitle Horse | Embed subtitles |
 | Kapwing (side-by-side) | Side by side, picture-in-picture |
-| Rev / Scribd | Auto-captioning, transcript editing |
+| Rev / Otter | Auto-captioning, transcript editing |
 | Loudnorm tools | Audio normalization |
 
 **The difference that matters:** every one of those tools uploads your file to a
