@@ -161,6 +161,9 @@
     .stack-mini.danger:hover:not(:disabled) { color: var(--danger); border-color: var(--danger); }
     .stack-mini:disabled { opacity: .3; cursor: not-allowed; }
     .stack-note { font-size: 0.78rem; color: var(--warn); background: rgba(234,179,8,.08); border: 1px solid rgba(234,179,8,.25); border-radius: 7px; padding: 9px 11px; margin-top: 6px; display: flex; align-items: center; gap: 7px; }
+    .hashcmd-banner { font-size: 0.82rem; border-radius: 7px; padding: 10px 14px; margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+    .hashcmd-banner.ok  { color: var(--accent-h); background: rgba(54,101,182,.12); border: 1px solid rgba(54,101,182,.35); }
+    .hashcmd-banner.err { color: var(--danger); background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.3); }
 
     .crop-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
     .crop-summary { font-size: 0.78rem; color: var(--text); font-weight: 600; }
@@ -332,6 +335,9 @@
 
   </header> 
 <div class="container">
+
+  <!-- Hash-JSON command grammar: #cmd=<encodeURIComponent(JSON.stringify(command))> -->
+  <div class="hashcmd-banner hidden" id="hashCmdBanner" role="status"></div>
 
   <!-- Status -->
   <div class="statusbar">
@@ -1244,6 +1250,11 @@ let batchMode = false;
 const batchQueue = [];  // Array of {file, status: 'pending'|'processing'|'done'|'error', error?: string}
 let batchCurrent = null;  // Index of currently processing file
 
+// ── Hash-JSON command grammar state ───────────────────
+// A validated {op, args, run} parsed from #cmd=..., waiting for a file (or for
+// hashCmd.run !== false) before it is dispatched. See buildHashCommandArgs().
+let pendingHashCommand = null;
+
 function onSubtitleFileChange(input) {
   if (!input.files.length) return;
   subtitleFile = input.files[0];
@@ -1653,6 +1664,10 @@ async function handleFile(file) {
     document.getElementById('thumbTime').value = (vidDur / 2).toFixed(1);
     updateSizeEstimate();
     updateRawPreview();
+    // A hash command was preloaded before this file arrived — run it now (unless run:false).
+    if (pendingHashCommand && pendingHashCommand.run !== false) {
+      runHashCommand(pendingHashCommand);
+    }
   };
   document.getElementById('inputWrap').classList.remove('hidden');
   document.getElementById('dropZone').classList.add('hidden');
@@ -5180,6 +5195,311 @@ async function confirmAutoCaptionTranscript() {
     confirmBtn.innerHTML = '<i class="fas fa-check"></i> Confirm & Embed';
   }
 }
+
+// ── Hash-JSON command grammar ──────────────────────────
+// A command is a small JSON object carried in the URL hash:
+//   #cmd=<encodeURIComponent(JSON.stringify({ op, args, run }))>
+// It describes an OPERATION only (never the file) and is a new entry point
+// into the same exec path used by the UI (writeFile → execWithWebmFallback →
+// readFile → renderOutput). See docs/command.schema.json for the schema this
+// validator implements.
+const HASH_CMD_OPS = {
+  trim: {
+    args: {
+      start: { type: 'number', min: 0 },
+      end:   { type: 'number', min: 0 },
+    },
+  },
+  convert: {
+    args: {
+      format: { type: 'enum', values: ['mp4', 'webm', 'mkv', 'mov', 'avi'] },
+    },
+  },
+  compress: {
+    args: {
+      crf:    { type: 'integer', min: 0, max: 51 },
+      preset: { type: 'enum', values: ['ultrafast', 'superfast', 'veryfast', 'faster', 'fast', 'medium', 'slow', 'slower', 'veryslow'] },
+    },
+  },
+  extract_audio: {
+    args: {
+      format:  { type: 'enum', values: ['mp3', 'aac', 'wav', 'ogg', 'flac'] },
+      bitrate: { type: 'integer', min: 32, max: 320, optional: true },
+    },
+  },
+  gif: {
+    args: {
+      fps:   { type: 'integer', min: 1, max: 30 },
+      width: { type: 'integer', min: 16, max: 1920 },
+    },
+  },
+};
+
+function validateHashArg(op, name, spec, value) {
+  if (value === undefined || value === null) {
+    return spec.optional ? null : `${op}.args.${name} is required`;
+  }
+  if (spec.type === 'integer') {
+    if (typeof value !== 'number' || !Number.isInteger(value)) return `${op}.args.${name} must be an integer (got ${JSON.stringify(value)})`;
+  } else if (spec.type === 'number') {
+    if (typeof value !== 'number' || !isFinite(value)) return `${op}.args.${name} must be a number (got ${JSON.stringify(value)})`;
+  } else if (spec.type === 'enum') {
+    if (typeof value !== 'string' || !spec.values.includes(value)) return `${op}.args.${name} must be one of ${spec.values.join(', ')} (got ${JSON.stringify(value)})`;
+    return null;
+  }
+  if (spec.min !== undefined && value < spec.min) return `${op}.args.${name} ${value} out of range (min ${spec.min})`;
+  if (spec.max !== undefined && value > spec.max) return `${op}.args.${name} ${value} out of range (max ${spec.max})`;
+  return null;
+}
+
+// Total, host-side validation. Never trust the hash. Returns
+// { ok:true, cmd:{op,args,run} } or { ok:false, error:'specific message' }.
+function validateCommand(raw) {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return { ok: false, error: 'command must be a JSON object' };
+  }
+  for (const key of Object.keys(raw)) {
+    if (key !== 'op' && key !== 'args' && key !== 'run') return { ok: false, error: `unknown top-level field '${key}'` };
+  }
+  const op = raw.op;
+  if (typeof op !== 'string' || !HASH_CMD_OPS[op]) {
+    return { ok: false, error: `unknown op ${JSON.stringify(op)} — must be one of ${Object.keys(HASH_CMD_OPS).join(', ')}` };
+  }
+  const schema = HASH_CMD_OPS[op];
+  const args = raw.args;
+  if (typeof args !== 'object' || args === null || Array.isArray(args)) {
+    return { ok: false, error: `op '${op}' requires an 'args' object` };
+  }
+  for (const key of Object.keys(args)) {
+    if (!schema.args[key]) return { ok: false, error: `unknown arg '${key}' for op '${op}'` };
+  }
+  for (const [name, spec] of Object.entries(schema.args)) {
+    const err = validateHashArg(op, name, spec, args[name]);
+    if (err) return { ok: false, error: err };
+  }
+  if (op === 'trim' && typeof args.start === 'number' && typeof args.end === 'number' && args.end <= args.start) {
+    return { ok: false, error: `trim.args.end (${args.end}) must be greater than trim.args.start (${args.start})` };
+  }
+  if (raw.run !== undefined && typeof raw.run !== 'boolean') {
+    return { ok: false, error: `'run' must be a boolean` };
+  }
+  return { ok: true, cmd: { op, args, run: raw.run } };
+}
+
+// Reads location.hash, extracts cmd=..., decodes and parses it. Never touches
+// URLSearchParams (which treats '+' as a space and would corrupt JSON).
+// Returns null if there is no #cmd= at all, otherwise a validateCommand() result.
+function parseHashCommand() {
+  const hash = location.hash;
+  if (!hash || hash === '#') return null;
+  const cmdPart = hash.slice(1).split('&').find(p => p.startsWith('cmd='));
+  if (!cmdPart) return null;
+  let raw;
+  try {
+    raw = JSON.parse(decodeURIComponent(cmdPart.slice(4)));
+  } catch (e) {
+    return { ok: false, error: 'malformed JSON in #cmd — ' + ((e && e.message) || e) };
+  }
+  return validateCommand(raw);
+}
+
+function showHashCmdBanner(msg, kind) {
+  const b = document.getElementById('hashCmdBanner');
+  if (!b) return;
+  b.textContent = msg;
+  b.className = 'hashcmd-banner ' + kind;
+  b.classList.remove('hidden');
+}
+function hideHashCmdBanner() {
+  document.getElementById('hashCmdBanner')?.classList.add('hidden');
+}
+
+// Best-effort UI preload so a human opening a recipe link sees the operation
+// and its args reflected in the panel. Purely cosmetic — actual execution
+// (buildHashCommandArgs/runHashCommand) always reads from cmd.args, never
+// from these DOM fields, so it works identically for a headless agent that
+// never touched the UI.
+function preloadOpFromCommand(cmd) {
+  const { op, args } = cmd;
+  switch (op) {
+    case 'trim': {
+      const end = vidDur > 0 ? Math.min(args.end, vidDur) : args.end;
+      document.getElementById('trimStart').value = Math.min(args.start, end);
+      document.getElementById('trimEnd').value   = end;
+      updateTrim();
+      break;
+    }
+    case 'convert':
+      setOp('convert');
+      document.getElementById('singleOutFmt').value = args.format;
+      break;
+    case 'compress':
+      setOp('resizecompress');
+      document.getElementById('rcCrf').value    = args.crf;
+      document.getElementById('rcPreset').value = args.preset;
+      break;
+    case 'extract_audio':
+      setOp('audio');
+      document.getElementById('audioFmt').value = args.format;
+      break;
+    case 'gif':
+      setOp('gif');
+      document.getElementById('gifFps').value = args.fps;
+      document.getElementById('gifW').value   = args.width;
+      break;
+  }
+  updateSizeEstimate();
+  updateRawPreview();
+}
+
+// Builds the ffmpeg args for one of the five hash-command ops. Independent of
+// the UI switch in runProcess() — reads only from cmd.args, never from DOM
+// fields, so the agent path never needs to touch a single control.
+function buildHashCommandArgs(cmd, inName) {
+  const { op, args } = cmd;
+  let ext = 'mp4';
+  const built = [];
+
+  switch (op) {
+    case 'trim': {
+      const dur   = vidDur || document.getElementById('inputVideo').duration || 0;
+      const start = Math.max(0, args.start);
+      const end   = dur > 0 ? Math.min(args.end, dur) : args.end;
+      if (end <= start) throw new Error(`trim.args.end (${args.end}) must be greater than trim.args.start (${args.start})`);
+      ext = inputExt || 'mp4';
+      built.push('-ss', start.toFixed(3), '-i', inName, '-t', (end - start).toFixed(3), '-c', 'copy');
+      break;
+    }
+    case 'convert': {
+      ext = args.format;
+      built.push('-i', inName);
+      if (['mp4', 'mkv', 'mov'].includes(ext)) {
+        built.push('-c:v', 'libx264', '-preset', 'fast', '-c:a', 'aac');
+      } else if (ext === 'webm') {
+        built.push('-c:v', 'libvpx-vp9', '-b:v', '0', '-crf', '30', '-c:a', 'libopus');
+      } else if (ext === 'avi') {
+        built.push('-c:v', 'mpeg4', '-q:v', '5', '-c:a', 'libmp3lame');
+      }
+      break;
+    }
+    case 'compress': {
+      ext = 'mp4';
+      built.push('-i', inName, '-c:v', 'libx264', '-crf', String(args.crf), '-preset', args.preset, '-c:a', 'aac', '-b:a', '128k');
+      break;
+    }
+    case 'extract_audio': {
+      ext = args.format;
+      built.push('-i', inName, '-vn');
+      const br = args.bitrate ? ['-b:a', args.bitrate + 'k'] : [];
+      if      (ext === 'mp3')  built.push('-c:a', 'libmp3lame', ...(br.length ? br : ['-q:a', '2']));
+      else if (ext === 'aac')  built.push('-c:a', 'aac', ...br);
+      else if (ext === 'wav')  built.push('-c:a', 'pcm_s16le');
+      else if (ext === 'ogg')  built.push('-c:a', 'libvorbis', ...br);
+      else if (ext === 'flac') built.push('-c:a', 'flac');
+      break;
+    }
+    case 'gif': {
+      ext = 'gif';
+      built.push('-i', inName, '-filter_complex',
+        `[0:v]fps=${args.fps},scale=${args.width}:-2:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse`);
+      break;
+    }
+    default:
+      throw new Error(`unsupported op '${op}'`);
+  }
+  return { args: built, ext };
+}
+
+// Executes a validated hash command through the same load/write/exec/read/
+// render pipeline as runProcess(). document.body.dataset.hashCmdStatus tracks
+// progress ('running'|'done'|'error') for the Playwright demo to poll.
+async function runHashCommand(cmd) {
+  if (!inputFile) return;
+  if (!isLoaded()) {
+    await loadFFmpeg();
+    if (!isLoaded()) return;
+  }
+
+  const btn = document.getElementById('processBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing…';
+  const pw = document.getElementById('progWrap');
+  pw.classList.remove('hidden');
+  document.getElementById('progFill').style.width = '0%';
+  document.getElementById('progPct').textContent  = '0%';
+
+  const inName = 'input.' + inputExt;
+  document.body.dataset.hashCmdStatus = 'running';
+  delete document.body.dataset.hashCmdError;
+
+  try {
+    await requestWakeLock();
+    addLog(`Hash command: running '${cmd.op}' ${JSON.stringify(cmd.args)}…`, 'ok');
+    await ffmpeg.writeFile(inName, await fetchFile(inputFile));
+
+    const { args, ext } = buildHashCommandArgs(cmd, inName);
+    outExt = ext;
+    const outName = 'output.' + ext;
+    args.push(outName);
+    applyWasmVp9Safety(args, document.getElementById('inputVideo').videoWidth || 0, addLog);
+
+    addLog('ffmpeg ' + args.join(' '), 'ok');
+    const exitCode = await execWithWebmFallback(args, document.getElementById('inputVideo').videoWidth || 0);
+    if (exitCode !== 0) throw new Error(`ffmpeg exited with code ${exitCode} — check your arguments and try again.`);
+    addLog('Done!', 'ok');
+
+    const finalOut = args[args.length - 1];
+    const finalExt = String(finalOut).split('.').pop().toLowerCase();
+    outExt = finalExt;
+    const data = await ffmpeg.readFile(finalOut);
+    await renderOutput(data, finalExt);
+
+    await ffmpeg.deleteFile(inName).catch(() => {});
+    await ffmpeg.deleteFile(finalOut).catch(() => {});
+    document.body.dataset.hashCmdStatus = 'done';
+  } catch (err) {
+    const errMsg = (err instanceof Error ? err.message : String(err)) || 'unknown error';
+    addLog('Hash command error: ' + errMsg, 'err');
+    document.body.dataset.hashCmdStatus = 'error';
+    document.body.dataset.hashCmdError  = errMsg;
+    try { await ffmpeg.deleteFile(inName); } catch (_) {}
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fas fa-gear"></i> Process Video';
+    releaseWakeLock();
+    pendingHashCommand = null; // consumed
+  }
+}
+
+// Entry point: called on load and on every hashchange.
+function handleHashCommand() {
+  const result = parseHashCommand();
+  hideHashCmdBanner();
+  if (result === null) { pendingHashCommand = null; return; }
+  if (!result.ok) {
+    pendingHashCommand = null;
+    addLog('Hash command rejected: ' + result.error, 'err');
+    showHashCmdBanner('Invalid #cmd — ' + result.error, 'err');
+    document.body.dataset.hashCmdStatus = 'invalid';
+    document.body.dataset.hashCmdError  = result.error;
+    return;
+  }
+  pendingHashCommand = result.cmd;
+  document.body.dataset.hashCmdStatus = 'preloaded';
+  delete document.body.dataset.hashCmdError;
+  addLog(`Hash command preloaded: ${result.cmd.op} ${JSON.stringify(result.cmd.args)}`, 'ok');
+  showHashCmdBanner(
+    `Recipe loaded: ${result.cmd.op} ${JSON.stringify(result.cmd.args)}` + (inputFile ? '' : ' — add a file to run it'),
+    'ok'
+  );
+  preloadOpFromCommand(result.cmd);
+  if (inputFile && result.cmd.run !== false) {
+    runHashCommand(result.cmd);
+  }
+}
+
+window.addEventListener('hashchange', handleHashCommand);
+handleHashCommand(); // check for a #cmd= present at initial page load
 
 // ── Expose all functions to window for inline event handlers ─────────────────────────
 Object.assign(window, {

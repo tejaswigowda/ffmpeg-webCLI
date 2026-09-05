@@ -1,0 +1,96 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://tejaswigowda.com/ffmpeg-webCLI/command.schema.json",
+  "title": "ffmpeg-webCLI hash command",
+  "description": "A single operation carried in the page URL hash as #cmd=<encodeURIComponent(JSON.stringify(command))>. Describes only the OPERATION — the input file is never part of this JSON; it is provided separately (user file picker, or an agent injecting a file into the page). Validated host-side in docs/index.html before any execution. Single-op only for this MVP — no chaining, no versioning, no extension points.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["op", "args"],
+  "properties": {
+    "op": {
+      "type": "string",
+      "enum": ["trim", "convert", "compress", "extract_audio", "gif"],
+      "description": "Which known, closed-set operation to run."
+    },
+    "args": {
+      "type": "object",
+      "description": "Operation-specific parameters. Exact shape depends on 'op' — see the 'oneOf' branches below."
+    },
+    "run": {
+      "type": "boolean",
+      "default": true,
+      "description": "If false, preload the operation into the UI but never auto-execute, even once a file is present (a 'recipe link' that waits for a manual click). Defaults to true: when a file is present, the command executes automatically."
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "op": { "const": "trim" },
+        "args": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["start", "end"],
+          "properties": {
+            "start": { "type": "number", "minimum": 0, "description": "Trim start, in seconds." },
+            "end":   { "type": "number", "minimum": 0, "description": "Trim end, in seconds. Must be greater than 'start'." }
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "op": { "const": "convert" },
+        "args": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["format"],
+          "properties": {
+            "format": { "type": "string", "enum": ["mp4", "webm", "mkv", "mov", "avi"], "description": "Output container/codec pair." }
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "op": { "const": "compress" },
+        "args": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["crf", "preset"],
+          "properties": {
+            "crf":    { "type": "integer", "minimum": 0, "maximum": 51, "description": "H.264 CRF. 18 = near-lossless, 51 = maximum compression." },
+            "preset": { "type": "string", "enum": ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"], "description": "x264 speed/efficiency trade-off." }
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "op": { "const": "extract_audio" },
+        "args": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["format"],
+          "properties": {
+            "format":  { "type": "string", "enum": ["mp3", "aac", "wav", "ogg", "flac"], "description": "Output audio format." },
+            "bitrate": { "type": "integer", "minimum": 32, "maximum": 320, "description": "Optional, kbps. Ignored for lossless formats (wav/flac)." }
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "op": { "const": "gif" },
+        "args": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["fps", "width"],
+          "properties": {
+            "fps":   { "type": "integer", "minimum": 1, "maximum": 30, "description": "Output frame rate." },
+            "width": { "type": "integer", "minimum": 16, "maximum": 1920, "description": "Output width in pixels; height auto-scales to preserve aspect ratio." }
+          }
+        }
+      }
+    }
+  ]
+}
